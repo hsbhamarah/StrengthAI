@@ -211,6 +211,26 @@ paths:
           description: Parsed sheets, candidate mapping, sampled rows, warnings and blocking errors
           content: {application/json: {schema: {$ref: '#/components/schemas/ImportPreview'}}}
         '404': {$ref: '#/components/responses/Error'}
+  /imports/{import_id}/mapping-preview:
+    post:
+      operationId: previewDraftMapping
+      description: Read-only extraction and validation of a coach-edited mapping; no canonical records are written.
+      parameters: [{$ref: '#/components/parameters/ImportId'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mapping]
+              properties:
+                mapping: {type: object, additionalProperties: true}
+      responses:
+        '200':
+          description: Bounded mapped-set samples, source-linked corrections and approval readiness
+          content: {application/json: {schema: {$ref: '#/components/schemas/MappingDraftPreview'}}}
+        '404': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
   /imports/{import_id}/commit:
     post:
       operationId: commitImport
@@ -505,6 +525,7 @@ components:
         sheets: {type: array, items: {type: string}}
         sample_rows: {type: array, items: {type: object}}
         proposed_mapping: {type: [object, 'null']}
+        reused_mapping_version: {type: [integer, 'null']}
         issues: {type: array, items: {$ref: '#/components/schemas/ValidationIssue'}}
         correction_cells:
           type: array
@@ -515,6 +536,20 @@ components:
               location: {type: string}
               raw_value: {type: string}
         can_commit: {type: boolean}
+    MappingDraftPreview:
+      type: object
+      required: [source_snapshot_hash, layout_fingerprint, row_count, blocking_count, can_approve, exercise_labels, issues, correction_cells, valid_sample_rows]
+      properties:
+        source_snapshot_hash: {type: string}
+        layout_fingerprint: {type: string}
+        row_count: {type: integer, minimum: 0}
+        blocking_count: {type: integer, minimum: 0}
+        exercise_labels: {type: array, items: {type: string}}
+        can_approve: {type: boolean}
+        issues_truncated: {type: boolean}
+        issues: {type: array, items: {$ref: '#/components/schemas/ValidationIssue'}}
+        correction_cells: {type: array, items: {type: object, additionalProperties: true}}
+        valid_sample_rows: {type: array, items: {type: object, additionalProperties: true}}
     ValidationIssue:
       type: object
       required: [severity, code, location, message]

@@ -135,6 +135,13 @@ h1,h2,h3{letter-spacing:-.035em}
 .issue strong{color:#365a44}
 .mapping-summary p{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #edf2ec;padding:7px 0;font-size:12px;margin:0}
 .mapping-summary span{color:#839789}
+.sheet-choices{display:flex;flex-wrap:wrap;gap:8px 16px;margin:12px 0}
+.sheet-choices label{display:flex;align-items:center;gap:7px;font-size:12px;color:#365a44}
+.wizard-sheet{border:1px solid #dfe9df;border-radius:6px;margin:14px 0;padding:16px}
+.wizard-sheet legend{font-size:13px;font-weight:800;color:#365a44;padding:0 6px}
+.wizard-sheet .two-col{margin-bottom:0}
+.issue-pages{display:flex;align-items:center;gap:12px;margin-top:12px;font-size:12px}
+.issue-pages button{padding:6px 10px}
 .alias-list label{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr);align-items:center;gap:12px;margin:7px 0;font-size:12px;color:#5e7766}
 .alias-list input{font-size:12px}
 .correction-row{display:flex;align-items:end;gap:12px;border-bottom:1px solid #edf2ed;padding:9px 0}

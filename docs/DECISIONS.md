@@ -1,5 +1,12 @@
 # Assumptions and open decisions
 
+## Reusable training-grid mappings, 2026-11-25
+
+- The importer now suggests training tabs by finding repeated `Week N` / `sets` headers beyond the first row. The coach can change selected tabs, header rows, day/exercise columns, week columns, block labels, units, and aliases before a read-only mapped-set preview. Only an explicit mapping approval followed by commit writes canonical sets.
+- Numeric target ranges are stored as prescription bounds. Nonnumeric actual cells and zero-rep outcomes require individual coach decisions; the source value remains in lineage. An approved structural profile can be offered on a corrected workbook, but snapshot-specific cell corrections are cleared and must be reviewed again.
+- The new mapping shape is version 2 inside existing profile JSON, so no database migration is needed. Legacy profile fingerprints and extraction defaults remain available. Mixed workbooks may still need coach selection or new format support; this is not a claim that every Excel layout imports automatically.
+- A read-only pass over the local diagnostic workbook found 11 candidate training tabs, 5,607 candidate sets, and 2,311 blocking findings after row-order set numbering. Most need individual numeric or missing-value decisions. These counts describe a draft over all suggested tabs, not coach-approved canonical data or a completed real-workbook acceptance test.
+
 ## Workbook preview limit, 2026-11-25
 
 - A local `.xlsx` upload failed preview solely because three worksheets extended beyond the 100-column cap; the widest had 157 columns. The workbook has 15 sheets, stays below 10 MB, and previewed in 7.5 seconds with a 200-column cap. The cap is now 200; the 20,000-row, 30-sheet, 10 MB upload, and archive expansion limits remain. This diagnostic preview did not approve a mapping or commit training data. Full AT-02 sign-off still needs coach-approved reference workbooks.

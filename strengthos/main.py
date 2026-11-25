@@ -31,7 +31,7 @@ from argon2 import PasswordHasher
 from strengthos.db import (ActualSet, Athlete, Base, DataSource, Exercise, ExercisePrescription,
     ImportJob, MappingProfile, PrescribedSet, RecordRevision, Session, SessionLocal,
     SourceRecord, TrainingBlock, TrainingWeek, engine)
-from strengthos.ingestion import MAX_UPLOAD_BYTES, WorkbookLimitError, extract_rows, inspect_workbook, validate_mapping
+from strengthos.ingestion import MAX_UPLOAD_BYTES, WorkbookLimitError, extract_rows, inspect_workbook, mapping_fingerprint, validate_mapping
 from strengthos.metrics import compute
 from strengthos.setup import create_coach, normalize_email, credentials
 
@@ -112,6 +112,10 @@ class AthleteInput(BaseModel):
 class MappingInput(BaseModel):
     import_id: str
     layout_fingerprint: str
+    mapping: dict
+
+
+class MappingDraft(BaseModel):
     mapping: dict
 
 
@@ -290,7 +294,104 @@ def import_preview(import_id: str, session: DBSession = Depends(db)):
     if not job:
         raise HTTPException(404, "Import not found")
     result = json.loads(job.preview_json)
+    profiles = session.scalars(select(MappingProfile).where(MappingProfile.source_id == job.source_id).order_by(MappingProfile.version.desc())).all()
+    if profiles:
+        data = _snapshot(session, job)
+        for profile in profiles:
+            approved = json.loads(profile.mapping_json)
+            try:
+                validate_mapping(approved, result["sheets"])
+                if mapping_fingerprint(data, approved, result["layout_fingerprint"]) != profile.layout_fingerprint:
+                    continue
+            except (ValueError, KeyError):
+                continue
+            approved["cell_overrides"] = {}
+            approved["actual_status_overrides"] = {}
+            result["proposed_mapping"] = approved
+            result["reused_mapping_version"] = profile.version
+            break
     return {"import_id": import_id, "source_snapshot_hash": job.source_snapshot_hash, **result}
+
+
+def _snapshot(session: DBSession, job: ImportJob) -> bytes:
+    data = session.execute(text("SELECT content FROM workbook_snapshots WHERE import_id=:id"), {"id": job.import_id}).scalar_one_or_none()
+    if data is None or hashlib.sha256(data).hexdigest() != job.source_snapshot_hash:
+        raise HTTPException(409, "Workbook snapshot unavailable or changed")
+    return data
+
+
+def _review_rows(rows: list[dict], mapping: dict) -> dict:
+    issues = []
+    corrections = []
+    samples = []
+    seen: set[str] = set()
+    blocking_count = 0
+    exercise_labels = sorted({str(row.get("exercise_label")).strip() for row in rows if row.get("exercise_label")})[:500]
+    for row in rows:
+        row_issues = []
+        field_locations = row.get("_field_locations") or ({field: row["_source_columns"][offset]
+            for field, offset in (("target_reps", 1), ("target_load", 2), ("target_rpe", 3),
+                                  ("actual_reps", 4), ("actual_rpe", 5))} if row.get("_source_columns") else {})
+        if field_locations:
+            for field, maximum in (("target_reps", None), ("target_load", None),
+                                   ("target_rpe", 10), ("actual_reps", None), ("actual_rpe", 10)):
+                if field not in field_locations:
+                    continue
+                value = row.get(field)
+                try:
+                    number(value, field, 0, maximum)
+                except ValueError:
+                    location = f"{row['_sheet']}!{field_locations[field]}"
+                    row_issues.append({"severity": "blocking", "code": "cell_correction", "location": location,
+                                       "message": f"{field.replace('_', ' ').title()} needs a numeric correction or an explicit missing value."})
+                    corrections.append({"location": location, "field": field, "raw_value": str(value)[:120]})
+            actual = row.get("actual_reps")
+            location = f"{row['_sheet']}!{field_locations.get('actual_reps', row['_row'])}"
+            if 'actual_reps' in field_locations and actual in (0, 0.0, "0") and not row.get("actual_status"):
+                row_issues.append({"severity": "blocking", "code": "zero_actual_status", "location": location,
+                                   "message": "Choose failed, skipped or unreported for zero actual reps."})
+                corrections.append({"location": location, "field": "actual_status", "raw_value": str(actual)})
+        if not row_issues:
+            try:
+                normalized = _normalize_row(row, mapping, seen)
+                if len(samples) < 30:
+                    samples.append({"source": f"{row['_sheet']}!{row['_row']}",
+                                    "block": normalized["block_label"], "week": normalized["week_label"],
+                                    "session": normalized["session_label"], "exercise": normalized["exercise_label"],
+                                    "set_index": normalized["set_index"], "side": normalized["side"],
+                                    "values": normalized["values"]})
+            except ValueError as exc:
+                location = f"{row['_sheet']}!{row['_row']}"
+                if str(exc) == "Actual values without reps need review" and 'actual_reps' in field_locations:
+                    location = f"{row['_sheet']}!{field_locations['actual_reps']}"
+                    corrections.append({"location": location, "field": "actual_reps", "raw_value": str(row.get("actual_reps"))})
+                row_issues.append({"severity": "blocking", "code": "invalid_set", "location": location,
+                                   "message": str(exc)[:200]})
+        blocking_count += len(row_issues)
+        if len(issues) < 5000:
+            issues.extend(row_issues[:5000 - len(issues)])
+        if len(corrections) > 5000:
+            corrections = corrections[:5000]
+    return {"row_count": len(rows), "exercise_labels": exercise_labels, "valid_sample_rows": samples, "blocking_count": blocking_count,
+            "issues": issues, "correction_cells": corrections, "issues_truncated": blocking_count > len(issues),
+            "can_approve": bool(rows) and blocking_count == 0}
+
+
+@app.post("/api/v1/imports/{import_id}/mapping-preview", dependencies=[Depends(coach)])
+def draft_mapping_preview(import_id: str, payload: MappingDraft, session: DBSession = Depends(db)):
+    job = session.get(ImportJob, import_id)
+    if not job:
+        raise HTTPException(404, "Import not found")
+    preview = json.loads(job.preview_json)
+    try:
+        validate_mapping(payload.mapping, preview["sheets"])
+        data = _snapshot(session, job)
+        rows = extract_rows(data, payload.mapping)
+        fingerprint = mapping_fingerprint(data, payload.mapping, preview["layout_fingerprint"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)[:200]) from None
+    return {"source_snapshot_hash": job.source_snapshot_hash, "layout_fingerprint": fingerprint,
+            **_review_rows(rows, payload.mapping)}
 
 
 @app.put("/api/v1/mappings/{mapping_id}", dependencies=[Depends(coach)])
@@ -299,10 +400,14 @@ def approve_mapping(mapping_id: str, payload: MappingInput, session: DBSession =
     if not job:
         raise HTTPException(404, "Import not found")
     preview = json.loads(job.preview_json)
-    if payload.layout_fingerprint != preview["layout_fingerprint"]:
-        raise HTTPException(409, "Preview layout changed")
     try:
         validate_mapping(payload.mapping, preview["sheets"])
+        data = _snapshot(session, job)
+        if payload.layout_fingerprint != mapping_fingerprint(data, payload.mapping, preview["layout_fingerprint"]):
+            raise HTTPException(409, "Preview layout changed")
+        reviewed = _review_rows(extract_rows(data, payload.mapping), payload.mapping)
+        if not reviewed["can_approve"]:
+            raise HTTPException(422, f"Mapping has {reviewed['blocking_count']} blocking issues; review cells before approval")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     version = 1 + max((p.version for p in session.scalars(select(MappingProfile).where(MappingProfile.source_id == job.source_id))), default=0)
@@ -325,12 +430,92 @@ def number(value, label, minimum=0, maximum=None):
     return result
 
 
+def _normalize_row(row: dict, mapping: dict, seen: set[str]) -> dict:
+    if row.get("_set_count_issue"):
+        raise ValueError("A row contains more than one set; review its set-count interpretation")
+    block_label, week_label, session_label, exercise_label = (str(row.get(k) or "").strip() for k in ("block", "week", "session", "exercise_label"))
+    if not all((block_label, week_label, session_label, exercise_label)):
+        raise ValueError("Missing block, week, session or exercise")
+    week_dates = mapping.get("week_dates", {}).get(week_label)
+    week_start = week_end = None
+    if week_dates is not None:
+        if not isinstance(week_dates, list) or len(week_dates) != 2:
+            raise ValueError(f"Invalid week dates for {week_label}")
+        try:
+            week_start, week_end = (datetime.fromisoformat(d).date().isoformat() for d in week_dates)
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid week dates for {week_label}") from None
+        if week_end < week_start:
+            raise ValueError(f"Week end precedes start for {week_label}")
+    try:
+        set_index = int(row["set_index"])
+    except (TypeError, ValueError):
+        raise ValueError("Invalid set index") from None
+    if set_index < 1:
+        raise ValueError("Set index must be positive")
+    side = row.get("side", "both")
+    if side not in ("both", "right", "left"):
+        raise ValueError("Invalid side")
+    set_type = str(row.get("set_type") or "other").lower().replace("-", "")
+    if set_type not in ("top", "backoff", "warmup", "other"):
+        raise ValueError("Unknown set type")
+    canonical_exercise = mapping.get("exercise_aliases", {}).get(exercise_label)
+    if not canonical_exercise:
+        raise ValueError(f"Exercise alias requires approval: {exercise_label}")
+    key = json.dumps([block_label, week_label, session_label, canonical_exercise, set_index, side])
+    if key in seen:
+        raise ValueError("Duplicate semantic set key")
+    factor = 0.45359237 if mapping.get("load_unit", "kg") == "lb" else 1
+    target_reps = number(row.get("target_reps"), "target_reps")
+    target_load = number(row.get("target_load"), "target_load")
+    actual_reps = number(row.get("actual_reps"), "actual_reps")
+    actual_load = number(row.get("actual_load"), "actual_load")
+    target_rpe = number(row.get("target_rpe"), "target_rpe", 0, 10)
+    actual_rpe = number(row.get("actual_rpe"), "actual_rpe", 0, 10)
+    ranges = {}
+    for field, maximum in (("target_reps", None), ("target_rpe", 10), ("target_rir", None)):
+        lower = number(row.get(f"{field}_min"), f"{field}_min", 0, maximum)
+        upper = number(row.get(f"{field}_max"), f"{field}_max", 0, maximum)
+        if (lower is None) != (upper is None) or (lower is not None and lower > upper):
+            raise ValueError(f"Invalid {field} range")
+        if lower is not None and row.get(field) is not None:
+            raise ValueError(f"Scalar and range {field} both supplied")
+        ranges[f"{field}_min"] = lower
+        ranges[f"{field}_max"] = upper
+    status = str(row.get("actual_status") or "").strip().lower()
+    if status and status not in ("completed", "failed", "skipped"):
+        raise ValueError("Invalid actual status")
+    if not status and any(v is not None for v in (actual_reps, actual_load, actual_rpe)):
+        if actual_reps == 0:
+            raise ValueError("Zero reps requires failed, skipped or unreported review")
+        if mapping.get("schema_version", 1) >= 2 and actual_reps is None:
+            raise ValueError("Actual values without reps need review")
+        status = "completed"
+    if status == "skipped" and any(v is not None for v in (actual_reps, actual_load, actual_rpe)):
+        raise ValueError("Skipped set cannot have performance values")
+    values = {"target_reps": target_reps, "target_load_kg": target_load * factor if target_load is not None else None,
+        "target_rpe": target_rpe, "target_rir": number(row.get("target_rir"), "target_rir"),
+        "percent_1rm": number(row.get("percent_1rm"), "percent_1rm", 0, 100),
+        "reference_1rm_kg": number(row.get("reference_1rm"), "reference_1rm"),
+        "status": status, "reps": actual_reps, "load_kg": actual_load * factor if actual_load is not None else None,
+        "actual_rpe": actual_rpe, "actual_rir": number(row.get("actual_rir"), "actual_rir"), **ranges}
+    seen.add(key)
+    return {"block_label": block_label, "week_label": week_label, "session_label": session_label,
+            "exercise_label": exercise_label, "canonical_exercise": canonical_exercise, "set_index": set_index,
+            "side": side, "set_type": set_type, "key": key, "week_start": week_start,
+            "week_end": week_end, "values": values}
+
+
 def _commit_rows(session: DBSession, job: ImportJob, profile: MappingProfile, rows: list[dict]):
+    if not rows:
+        raise ValueError("Mapping produced no training sets")
     mapping = json.loads(profile.mapping_json)
     source = session.get(DataSource, job.source_id)
     changes = 0
     seen = set()
+    reviewed_seen: set[str] = set()
     for row in rows:
+        _normalize_row(row, mapping, reviewed_seen)
         block_label, week_label, session_label, exercise_label = (str(row.get(k) or "").strip() for k in ("block", "week", "session", "exercise_label"))
         if not all((block_label, week_label, session_label, exercise_label)):
             raise ValueError(f"Missing grouping field at {row['_sheet']}!{row['_row']}")
@@ -475,17 +660,13 @@ def commit_import(import_id: str, payload: CommitInput, session: DBSession = Dep
         raise HTTPException(404, "Import or mapping not found")
     if payload.acknowledged_snapshot_hash != job.source_snapshot_hash:
         raise HTTPException(409, "Snapshot hash mismatch")
-    data = session.execute(text("SELECT content FROM workbook_snapshots WHERE import_id=:id"), {"id": import_id}).scalar_one_or_none()
-    if data is None:
-        raise HTTPException(409, "Workbook snapshot unavailable")
-    if hashlib.sha256(data).hexdigest() != job.source_snapshot_hash:
-        raise HTTPException(409, "Snapshot changed")
+    data = _snapshot(session, job)
     preview = inspect_workbook(data)
-    if preview["layout_fingerprint"] != profile.layout_fingerprint:
+    approved = json.loads(profile.mapping_json)
+    if mapping_fingerprint(data, approved, preview["layout_fingerprint"]) != profile.layout_fingerprint:
         raise HTTPException(409, "Layout drift requires review")
     try:
-        rows = extract_rows(data, json.loads(profile.mapping_json))
-        approved = json.loads(profile.mapping_json)
+        rows = extract_rows(data, approved)
         if not approved.get("exercise_aliases"):
             raise ValueError("Exercise aliases require approval")
         changes = _commit_rows(session, job, profile, rows)

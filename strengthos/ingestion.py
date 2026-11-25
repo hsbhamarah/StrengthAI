@@ -61,25 +61,38 @@ def inspect_workbook(data: bytes) -> dict[str, Any]:
         if sheet.max_row > MAX_ROWS or sheet.max_column > MAX_COLUMNS:
             raise WorkbookLimitError(f"Worksheet {sheet_number} has {sheet.max_row} rows and {sheet.max_column} columns; limits are {MAX_ROWS:,} rows and {MAX_COLUMNS} columns")
         sheets.append(sheet.title)
-        first_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
-        second_row = next(sheet.iter_rows(min_row=2, max_row=2, values_only=True), ())
+        top_rows = list(sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 16), values_only=True))
+        first_row = top_rows[0] if top_rows else ()
+        second_row = top_rows[1] if len(top_rows) > 1 else ()
         headers.append({"sheet": sheet.title, "row1": first_row, "row2": second_row})
-        week_columns = [get_column_letter(index) for index, value in enumerate(first_row, start=1)
-                        if isinstance(value, str) and re.fullmatch(r"week\s*\d+", value.strip(), re.IGNORECASE)
-                        and index <= len(second_row) and str(second_row[index - 1]).strip().lower() == "sets"]
-        if week_columns:
-            wide_sheets.append({"sheet": sheet.title, "week_columns": week_columns})
-        for row_number, row in enumerate(sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 8)), start=1):
+        for header_index, row in enumerate(top_rows[:-1]):
+            following = top_rows[header_index + 1]
+            week_columns = [get_column_letter(index) for index, value in enumerate(row, start=1)
+                            if isinstance(value, str) and re.fullmatch(r"week\s*\d+", value.strip(), re.IGNORECASE)
+                            and index <= len(following) and str(following[index - 1]).strip().lower() == "sets"]
+            if not week_columns:
+                continue
+            exercise_column = next((get_column_letter(index) for index, value in enumerate(following[:4], start=1)
+                                    if isinstance(value, str) and value.strip().lower() == "exercise"), "B")
+            day_column = next((get_column_letter(index) for sample in top_rows[header_index + 2:]
+                               for index, value in enumerate(sample[:4], start=1)
+                               if isinstance(value, str) and re.match(r"day\s*\d+\b", value.strip(), re.IGNORECASE)), "A")
+            wide_sheets.append({"sheet": sheet.title, "week_columns": week_columns,
+                                "week_header_row": header_index + 1, "header_row": header_index + 2,
+                                "session_column": day_column, "exercise_column": exercise_column,
+                                "set_index_mode": "row_order", "block_label": ""})
+            break
+        for row_number, row in enumerate(sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 12)), start=1):
             samples.append({"sheet": sheet.title, "row": row_number, "cells": {cell.coordinate: cell.value for cell in row if cell.value is not None}})
     if not sheets:
         issues.append({"severity": "blocking", "code": "empty_workbook", "location": "workbook", "message": "No worksheets found"})
     fingerprint = hashlib.sha256(json.dumps(headers, sort_keys=True, default=str).encode()).hexdigest()
     proposed = None
     if wide_sheets:
-        proposed = {"layout": "wide_week_grid", "sheet_mappings": wide_sheets,
+        proposed = {"layout": "wide_week_grid", "schema_version": 2, "sheet_mappings": wide_sheets,
                     "header_row": 2, "week_header_row": 1, "block_label": "",
                     "week_dates": {}, "exercise_aliases": {}, "load_unit": "kg",
-                    "zero_actual_status": "skipped", "cell_overrides": {}}
+                    "zero_actual_status": None, "cell_overrides": {}, "actual_status_overrides": {}}
         candidate_rows = extract_rows(data, {**proposed, "block_label": "preview"})
         proposed["exercise_aliases"] = {label: label for label in sorted({row["exercise_label"] for row in candidate_rows})}
         issues.append({"severity": "warning", "code": "wide_layout", "location": "workbook",
@@ -113,6 +126,8 @@ def inspect_workbook(data: bytes) -> dict[str, Any]:
 
 
 def validate_mapping(mapping: dict[str, Any], sheets: list[str]) -> None:
+    if mapping.get("schema_version", 1) not in (1, 2):
+        raise ValueError("Unsupported mapping schema version")
     layout = mapping.get("layout", "row_per_set")
     if layout == "wide_week_grid":
         groups_by_sheet = mapping.get("sheet_mappings")
@@ -124,10 +139,21 @@ def validate_mapping(mapping: dict[str, Any], sheets: list[str]) -> None:
             if not isinstance(group, dict) or group.get("sheet") not in sheets:
                 raise ValueError("Mapping worksheet is absent")
             columns = group.get("week_columns")
-            if not isinstance(columns, list) or not columns or any(not isinstance(col, str) or not col.isalpha() for col in columns):
+            if not isinstance(columns, list) or not columns or any(not isinstance(col, str) or not col.isalpha() or column_index_from_string(col.upper()) > MAX_COLUMNS for col in columns):
                 raise ValueError("Wide mapping requires week_columns")
-        if not isinstance(mapping.get("block_label"), str) or not mapping["block_label"].strip():
-            raise ValueError("Wide mapping requires an approved block_label")
+            for row_field in ("header_row", "week_header_row"):
+                row_number = group.get(row_field, mapping.get(row_field, 1 if row_field == "week_header_row" else None))
+                if not isinstance(row_number, int) or not 1 <= row_number <= MAX_ROWS:
+                    raise ValueError(f"{row_field} must be a valid worksheet row")
+            for column_field in ("session_column", "exercise_column"):
+                column = group.get(column_field, "A" if column_field == "session_column" else "B")
+                if not isinstance(column, str) or not column.isalpha() or column_index_from_string(column.upper()) > MAX_COLUMNS:
+                    raise ValueError(f"{column_field} must be a valid worksheet column")
+            block = group.get("block_label") or mapping.get("block_label")
+            if not isinstance(block, str) or not block.strip():
+                raise ValueError("Each training sheet needs an approved block label")
+            if group.get("set_index_mode", "cell_index") not in ("cell_index", "row_order"):
+                raise ValueError("Set index mode must be cell_index or row_order")
     elif layout == "row_per_set":
         if mapping.get("sheet") not in sheets:
             raise ValueError("Mapping worksheet is absent")
@@ -146,6 +172,10 @@ def validate_mapping(mapping: dict[str, Any], sheets: list[str]) -> None:
         raise ValueError("Unsupported zero actual status rule")
     if not isinstance(mapping.get("cell_overrides", {}), dict):
         raise ValueError("cell_overrides must be an object")
+    if not isinstance(mapping.get("actual_status_overrides", {}), dict) or any(
+        status not in ("failed", "skipped", "unreported") for status in mapping.get("actual_status_overrides", {}).values()
+    ):
+        raise ValueError("actual_status_overrides must contain failed, skipped or unreported")
     if not isinstance(mapping.get("exercise_aliases", {}), dict):
         raise ValueError("exercise_aliases must be an object")
 
@@ -159,7 +189,7 @@ def extract_rows(data: bytes, mapping: dict[str, Any]) -> list[dict[str, Any]]:
             sheet = book[group["sheet"]]
             if sheet.max_row is None or sheet.max_column is None:
                 sheet.calculate_dimension(force=True)
-            output.extend(_extract_wide_week_grid(sheet, {**mapping, **group}))
+            output.extend(_extract_wide_week_grid(sheet, {**mapping, **group, "block_label": group.get("block_label") or mapping.get("block_label")}))
         return output
     sheet = book[mapping["sheet"]]
     if sheet.max_row is None or sheet.max_column is None:
@@ -173,8 +203,49 @@ def extract_rows(data: bytes, mapping: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         values["_sheet"] = sheet.title
         values["_row"] = row_number
+        values["_field_locations"] = {field: f"{get_column_letter(index + 1)}{row_number}" for field, index in indices.items()}
+        for field, coordinate in values["_field_locations"].items():
+            location = f"{sheet.title}!{coordinate}"
+            if location in mapping.get("cell_overrides", {}):
+                values[f"_raw_{field}"] = str(values[field])
+                values[field] = mapping["cell_overrides"][location]
+                if field == "actual_reps" and values[field] is None:
+                    for actual_field in ("actual_load", "actual_rpe", "actual_rir"):
+                        values[f"_raw_{actual_field}"] = values.get(actual_field)
+                        values[actual_field] = None
+            if field == "actual_reps" and location in mapping.get("actual_status_overrides", {}):
+                status = mapping["actual_status_overrides"][location]
+                values["actual_status"] = None if status == "unreported" else status
+                if status in ("skipped", "unreported"):
+                    for actual_field in ("actual_reps", "actual_load", "actual_rpe", "actual_rir"):
+                        values[f"_raw_{actual_field}"] = values.get(actual_field)
+                        values[actual_field] = None
         output.append(values)
     return output
+
+
+def mapping_fingerprint(data: bytes, mapping: dict[str, Any], legacy_fingerprint: str) -> str:
+    if mapping.get("schema_version", 1) < 2 or mapping.get("layout") != "wide_week_grid":
+        return legacy_fingerprint
+    book = load_workbook(io.BytesIO(data), read_only=True, data_only=True, keep_links=False)
+    structure = []
+    for group in mapping["sheet_mappings"]:
+        sheet = book[group["sheet"]]
+        week_row = group.get("week_header_row", mapping.get("week_header_row", 1))
+        set_row = group.get("header_row", mapping["header_row"])
+        columns = [column_index_from_string(value.upper()) for value in group["week_columns"]]
+        day_column = column_index_from_string(group.get("session_column", "A").upper())
+        day_marker = next(((index, re.match(r"day\s*\d+", str(row[0].value).strip(), re.IGNORECASE).group(0).lower())
+                           for index, row in enumerate(sheet.iter_rows(min_row=set_row + 1, max_row=min(set_row + 50, sheet.max_row or set_row + 50),
+                                                                      min_col=day_column, max_col=day_column), start=set_row + 1)
+                           if row[0].value is not None and re.match(r"day\s*\d+", str(row[0].value).strip(), re.IGNORECASE)), None)
+        structure.append({"sheet": sheet.title, "week_row": week_row, "set_row": set_row,
+                          "session_column": group.get("session_column", "A"), "exercise_column": group.get("exercise_column", "B"),
+                          "weeks": [(sheet.cell(week_row, col).value, sheet.cell(set_row, col).value) for col in columns],
+                          "exercise_header": sheet[f"{group.get('exercise_column', 'B')}{set_row}"].value,
+                          "first_day_marker": day_marker})
+    book.close()
+    return hashlib.sha256(json.dumps(structure, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def _extract_wide_week_grid(sheet, mapping: dict[str, Any]) -> list[dict[str, Any]]:
@@ -182,29 +253,40 @@ def _extract_wide_week_grid(sheet, mapping: dict[str, Any]) -> list[dict[str, An
     week_header_row = mapping.get("week_header_row", 1)
     session = None
     exercise = None
+    session_index = column_index_from_string(mapping.get("session_column", "A").upper()) - 1
+    exercise_index = column_index_from_string(mapping.get("exercise_column", "B").upper()) - 1
     output = []
     groups = []
+    row_ordinals: dict[tuple[str, str, str], int] = {}
     for column in mapping["week_columns"]:
         index = column_index_from_string(column.upper())
         label = sheet.cell(week_header_row, index).value
         if not isinstance(label, str) or not label.strip():
             raise ValueError(f"Week label missing at {column}{week_header_row}")
         groups.append((index, label.strip()))
-    max_col = max(index + 5 for index, _ in groups)
+    max_col = max(max(index + 5 for index, _ in groups), session_index + 1, exercise_index + 1)
     for row_number, cells in enumerate(sheet.iter_rows(min_row=mapping["header_row"] + 1, max_row=min(sheet.max_row, MAX_ROWS), max_col=max_col, values_only=False), start=mapping["header_row"] + 1):
-        section = cells[0].value
-        movement = cells[1].value
-        if isinstance(section, str) and re.fullmatch(r"day\s*\d+", section.strip(), re.IGNORECASE):
-            session = section.strip()
+        section = cells[session_index].value
+        movement = cells[exercise_index].value
+        day = re.match(r"(day\s*\d+)\b", section.strip(), re.IGNORECASE) if isinstance(section, str) else None
+        if day:
+            session = day.group(1)
             exercise = None
-        if isinstance(movement, str) and movement.strip() and not (isinstance(section, str) and re.fullmatch(r"day\s*\d+", section.strip(), re.IGNORECASE)):
+        if isinstance(movement, str) and movement.strip() and not day:
             exercise = movement.strip()
         if not session or not exercise:
             continue
         for index, week in groups:
             set_label = cells[index - 1].value
             match = re.fullmatch(r"set\s*(\d+)", str(set_label).strip(), re.IGNORECASE) if set_label is not None else None
-            if not match:
+            numeric = int(set_label) if isinstance(set_label, (int, float)) and set_label > 0 and float(set_label).is_integer() else None
+            if mapping.get("set_index_mode") == "row_order" and numeric is not None:
+                ordinal_key = (week, session, exercise)
+                set_index = row_ordinals.get(ordinal_key, 0) + 1
+                row_ordinals[ordinal_key] = set_index
+            else:
+                set_index = numeric if numeric is not None else int(match.group(1)) if match else None
+            if set_index is None:
                 continue
             reps_cell = cells[index]
             target_cell = cells[index + 2]
@@ -217,13 +299,13 @@ def _extract_wide_week_grid(sheet, mapping: dict[str, Any]) -> list[dict[str, An
                 if rir_range:
                     target_rir_min, target_rir_max = map(float, rir_range.groups())
                     target_rir = None
-            reps_range = _date_formatted_range(reps_cell)
-            rpe_range = _date_formatted_range(target_cell)
+            reps_range = _date_formatted_range(reps_cell) or _numeric_range(reps_cell.value)
+            rpe_range = _date_formatted_range(target_cell) or _numeric_range(target_cell.value)
             actual_reps = cells[index + 3].value
             load = cells[index + 1].value
             extracted = {
                 "block": mapping["block_label"], "week": week, "session": session,
-                "exercise_label": exercise, "set_index": int(match.group(1)),
+                "exercise_label": exercise, "set_index": set_index,
                 "set_type": "other", "target_reps": None if reps_range else reps_cell.value,
                 "target_reps_min": reps_range[0] if reps_range else None,
                 "target_reps_max": reps_range[1] if reps_range else None,
@@ -238,27 +320,31 @@ def _extract_wide_week_grid(sheet, mapping: dict[str, Any]) -> list[dict[str, An
                 "_sheet": sheet.title, "_row": row_number,
                 "_source_columns": [f"{get_column_letter(index + offset)}{row_number}" for offset in range(6)],
             }
+            if mapping.get("set_index_mode") == "row_order" and numeric is not None and numeric != 1:
+                extracted["_set_count_issue"] = True
             if reps_range:
                 extracted["_raw_target_reps"] = str(reps_cell.value)
             if rpe_range:
                 extracted["_raw_target_rpe"] = str(target_cell.value)
-            override_key = f"{sheet.title}!{get_column_letter(index + 1)}{row_number}"
-            if isinstance(extracted["target_reps"], (date, time)) and override_key in mapping.get("cell_overrides", {}):
-                extracted["_raw_target_reps"] = str(extracted["target_reps"])
-                extracted["target_reps"] = mapping["cell_overrides"][override_key]
-            target_override_key = f"{sheet.title}!{get_column_letter(index + 3)}{row_number}"
-            if isinstance(extracted["target_rpe"], (date, time)) and target_override_key in mapping.get("cell_overrides", {}):
-                extracted["_raw_target_rpe"] = str(extracted["target_rpe"])
-                extracted["target_rpe"] = mapping["cell_overrides"][target_override_key]
+            for field, offset in (("target_reps", 1), ("target_load", 2), ("target_rpe", 3),
+                                  ("actual_reps", 4), ("actual_rpe", 5)):
+                override_key = f"{sheet.title}!{get_column_letter(index + offset)}{row_number}"
+                if override_key in mapping.get("cell_overrides", {}):
+                    extracted[f"_raw_{field}"] = str(extracted[field])
+                    extracted[field] = mapping["cell_overrides"][override_key]
+                    if field == "target_load" and extracted["actual_reps"] is not None:
+                        extracted["actual_load"] = extracted[field]
+                    if field == "actual_reps" and extracted[field] is None:
+                        extracted["_raw_actual_rpe"] = extracted["actual_rpe"]
+                        extracted["actual_load"] = extracted["actual_rpe"] = None
             paired_fields = ("target_reps", "target_load", "target_rpe", "target_rir", "actual_reps", "actual_load", "actual_rpe")
             splits = {}
             for field in paired_fields:
                 value = extracted[field]
                 if isinstance(value, str) and "," in value:
                     pieces = [piece.strip() for piece in value.split(",")]
-                    if len(pieces) != 2 or not all(pieces):
-                        raise ValueError(f"Ambiguous paired value in {field} at row {row_number}")
-                    splits[field] = pieces
+                    if len(pieces) == 2 and all(pieces):
+                        splits[field] = pieces
             if splits:
                 for ordinal, side in enumerate(("right", "left")):
                     side_row = dict(extracted)
@@ -284,13 +370,27 @@ def _date_formatted_range(cell) -> tuple[int, int] | None:
     return low, high
 
 
+def _numeric_range(value) -> tuple[float, float] | None:
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*", value)
+    if not match:
+        return None
+    lower, upper = map(float, match.groups())
+    return (lower, upper) if lower <= upper else None
+
+
 def _apply_zero_actual_rule(row: dict[str, Any], mapping: dict[str, Any]) -> None:
-    if row["actual_reps"] in (0, 0.0, "0") and mapping.get("zero_actual_status") == "skipped":
+    actual_location = f"{row['_sheet']}!{row['_source_columns'][4]}"
+    status = mapping.get("actual_status_overrides", {}).get(actual_location)
+    if status == "failed":
+        row["actual_status"] = "failed"
+    if status in ("skipped", "unreported") or status is None and row["actual_reps"] in (0, 0.0, "0") and mapping.get("zero_actual_status") == "skipped":
         row["_raw_actual_reps"] = row["actual_reps"]
         row["_raw_actual_rpe"] = row["actual_rpe"]
         row["_raw_actual_load"] = row["actual_load"]
         row["_zero_actual_was_skipped"] = True
-        row["actual_status"] = "skipped"
+        row["actual_status"] = "skipped" if status != "unreported" else None
         row["actual_reps"] = None
         row["actual_load"] = None
         row["actual_rpe"] = None

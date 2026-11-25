@@ -85,6 +85,67 @@ class SecurityTests(unittest.TestCase):
                     limited = client.post("/api/v1/imports/excel", data={"athlete_id": athletes[0]}, files={"file": ("wide.xlsx", buf.getvalue())})
                     self.assertEqual(limited.status_code, 422)
                     self.assertIn("200 columns", limited.json()["detail"])
+                    grid = Workbook()
+                    tab = grid.active
+                    tab.title = "Phase"
+                    tab["C3"], tab["B4"], tab["C4"] = "Week 1", "Exercise", "sets"
+                    tab["B6"], tab["B7"] = "Day 1 - Squat", "Squat"
+                    tab["C7"], tab["D7"], tab["E7"], tab["F7"] = 1, 5, 100, 8
+                    tab["G7"], tab["H7"] = "5-6", 8
+                    def grid_bytes():
+                        output = io.BytesIO()
+                        grid.save(output)
+                        return output.getvalue()
+                    uploaded = client.post("/api/v1/imports/excel", data={"athlete_id": athletes[0]},
+                                           files={"file": ("grid.xlsx", grid_bytes())}).json()
+                    grid_source = uploaded["source_id"]
+                    grid_import = uploaded["import_id"]
+                    preview = client.get(f"/api/v1/imports/{grid_import}/preview").json()
+                    mapping = preview["proposed_mapping"]
+                    mapping["sheet_mappings"][0]["block_label"] = "Block 1"
+                    draft_url = f"/api/v1/imports/{grid_import}/mapping-preview"
+                    draft = client.post(draft_url, json={"mapping": mapping}).json()
+                    self.assertFalse(draft["can_approve"])
+                    self.assertEqual(draft["correction_cells"][0]["location"], "Phase!G7")
+                    self.assertEqual(client.put(f"/api/v1/mappings/{uuid4()}", json={"import_id": grid_import,
+                                     "layout_fingerprint": draft["layout_fingerprint"], "mapping": mapping}).status_code, 422)
+                    with engine.connect() as check:
+                        self.assertEqual(check.exec_driver_sql("SELECT COUNT(*) FROM prescribed_sets").scalar(), 0)
+                    mapping["cell_overrides"]["Phase!G7"] = 5
+                    draft = client.post(draft_url, json={"mapping": mapping}).json()
+                    self.assertTrue(draft["can_approve"])
+                    mapping_id = str(uuid4())
+                    approval = {"import_id": grid_import, "layout_fingerprint": draft["layout_fingerprint"], "mapping": mapping}
+                    self.assertEqual(client.put(f"/api/v1/mappings/{mapping_id}", json=approval).status_code, 200)
+                    commit = client.post(f"/api/v1/imports/{grid_import}/commit", json={"mapping_id": mapping_id,
+                                          "acknowledged_snapshot_hash": preview["source_snapshot_hash"]})
+                    self.assertEqual(commit.status_code, 200, commit.text)
+                    self.assertEqual(commit.json()["changed_records"], 1)
+                    same = client.post("/api/v1/imports/excel", data={"athlete_id": athletes[0], "source_id": grid_source},
+                                       files={"file": ("grid.xlsx", grid_bytes())}).json()
+                    same_preview = client.get(f"/api/v1/imports/{same['import_id']}/preview").json()
+                    self.assertEqual(same_preview["reused_mapping_version"], 1)
+                    self.assertEqual(same_preview["proposed_mapping"]["cell_overrides"], {})
+                    same_mapping_id = str(uuid4())
+                    self.assertEqual(client.put(f"/api/v1/mappings/{same_mapping_id}", json={**approval, "import_id": same["import_id"]}).status_code, 200)
+                    same_commit = client.post(f"/api/v1/imports/{same['import_id']}/commit", json={"mapping_id": same_mapping_id,
+                                               "acknowledged_snapshot_hash": same_preview["source_snapshot_hash"]})
+                    self.assertEqual(same_commit.json()["changed_records"], 0)
+                    tab["G7"] = 6
+                    changed = client.post("/api/v1/imports/excel", data={"athlete_id": athletes[0], "source_id": grid_source},
+                                          files={"file": ("grid.xlsx", grid_bytes())}).json()
+                    changed_preview = client.get(f"/api/v1/imports/{changed['import_id']}/preview").json()
+                    mapping["cell_overrides"].clear()
+                    changed_draft = client.post(f"/api/v1/imports/{changed['import_id']}/mapping-preview", json={"mapping": mapping}).json()
+                    self.assertTrue(changed_draft["can_approve"])
+                    changed_mapping_id = str(uuid4())
+                    self.assertEqual(client.put(f"/api/v1/mappings/{changed_mapping_id}", json={"import_id": changed["import_id"],
+                                     "layout_fingerprint": changed_draft["layout_fingerprint"], "mapping": mapping}).status_code, 200)
+                    changed_commit = client.post(f"/api/v1/imports/{changed['import_id']}/commit", json={"mapping_id": changed_mapping_id,
+                                                  "acknowledged_snapshot_hash": changed_preview["source_snapshot_hash"]})
+                    self.assertEqual(changed_commit.json()["changed_records"], 1)
+                    with engine.connect() as check:
+                        self.assertEqual(check.exec_driver_sql("SELECT COUNT(*) FROM record_revisions").scalar(), 1)
                     self.assertEqual(client.get("/.git/config").status_code, 404)
                     response = client.post("/api/v1/backups", json={"passphrase": "synthetic backup passphrase"})
                     self.assertEqual(response.status_code, 200)

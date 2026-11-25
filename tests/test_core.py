@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 from openpyxl import Workbook
 
-from strengthos.ingestion import WorkbookLimitError, extract_rows, inspect_workbook, validate_mapping
+from strengthos.ingestion import WorkbookLimitError, extract_rows, inspect_workbook, mapping_fingerprint, validate_mapping
+from strengthos.main import _review_rows
 from strengthos.metrics import compute
 from strengthos.main import Login, Signup, app, health, list_ollama_models, login, ollama_models, setup_status, signup
 from strengthos.setup import credentials, main as setup_coach
@@ -30,6 +31,78 @@ def workbook(headers, rows):
 
 
 class IngestionTests(unittest.TestCase):
+    def test_numeric_set_counts_use_row_order_when_approved(self):
+        book = Workbook()
+        sheet = book.active
+        sheet.title = 'Phase'
+        sheet['C3'], sheet['B4'], sheet['C4'] = 'Week1', 'Exercise', 'sets'
+        sheet['B6'], sheet['B7'] = 'Day 1', 'Squat'
+        for row in (7, 8):
+            sheet[f'C{row}'], sheet[f'D{row}'] = 1, 5
+        stream = io.BytesIO()
+        book.save(stream)
+        preview = inspect_workbook(stream.getvalue())
+        mapping = preview['proposed_mapping']
+        mapping['sheet_mappings'][0]['block_label'] = 'Block 1'
+        rows = extract_rows(stream.getvalue(), mapping)
+        self.assertEqual([row['set_index'] for row in rows], [1, 2])
+        self.assertTrue(_review_rows(rows, mapping)['can_approve'])
+
+    def test_zero_actual_requires_individual_status_decisions(self):
+        book = Workbook()
+        sheet = book.active
+        sheet.title = 'Phase'
+        sheet['C3'], sheet['B4'], sheet['C4'] = 'Week1', 'Exercise', 'sets'
+        sheet['B6'], sheet['B7'] = 'Day 1', 'Squat'
+        for row in (7, 8):
+            sheet[f'C{row}'], sheet[f'D{row}'], sheet[f'G{row}'] = 1, 5, 0
+        stream = io.BytesIO()
+        book.save(stream)
+        preview = inspect_workbook(stream.getvalue())
+        mapping = preview['proposed_mapping']
+        mapping['sheet_mappings'][0]['block_label'] = 'Block 1'
+        self.assertEqual(_review_rows(extract_rows(stream.getvalue(), mapping), mapping)['blocking_count'], 2)
+        mapping['actual_status_overrides'] = {'Phase!G7': 'failed', 'Phase!G8': 'skipped'}
+        rows = extract_rows(stream.getvalue(), mapping)
+        self.assertEqual((rows[0]['actual_status'], rows[0]['actual_reps']), ('failed', 0))
+        self.assertEqual((rows[1]['actual_status'], rows[1]['actual_reps']), ('skipped', None))
+        self.assertTrue(_review_rows(rows, mapping)['can_approve'])
+
+    def test_shifted_grid_proposes_reusable_mapping_and_reviews_actual_range(self):
+        book = Workbook()
+        sheet = book.active
+        sheet.title = 'Phase'
+        sheet['C3'], sheet['I3'] = 'Week 1', 'Week 2'
+        sheet['B4'], sheet['C4'], sheet['I4'] = 'Exercise', 'sets', 'sets'
+        sheet['B6'], sheet['B7'] = 'Day 1 - Squat', 'Squat'
+        sheet['C7'], sheet['D7'], sheet['E7'], sheet['F7'] = 1, '4-6', 100, 8
+        sheet['G7'], sheet['H7'] = '5-6', 8.5
+        stream = io.BytesIO()
+        book.save(stream)
+        data = stream.getvalue()
+        preview = inspect_workbook(data)
+        mapping = preview['proposed_mapping']
+        self.assertEqual(mapping['schema_version'], 2)
+        self.assertEqual(mapping['sheet_mappings'][0]['week_header_row'], 3)
+        self.assertEqual(mapping['sheet_mappings'][0]['session_column'], 'B')
+        self.assertEqual(mapping['sheet_mappings'][0]['week_columns'], ['C', 'I'])
+        mapping['sheet_mappings'][0]['block_label'] = 'Block 1'
+        validate_mapping(mapping, preview['sheets'])
+        rows = extract_rows(data, mapping)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['target_reps_min'], rows[0]['target_reps_max']), (4, 6))
+        self.assertEqual(rows[0]['session'], 'Day 1')
+        review = _review_rows(rows, mapping)
+        self.assertFalse(review['can_approve'])
+        self.assertEqual(review['correction_cells'][0]['location'], 'Phase!G7')
+        mapping['cell_overrides']['Phase!G7'] = 5
+        self.assertTrue(_review_rows(extract_rows(data, mapping), mapping)['can_approve'])
+        fingerprint = mapping_fingerprint(data, mapping, preview['layout_fingerprint'])
+        sheet['C3'] = 'Week 3'
+        changed = io.BytesIO()
+        book.save(changed)
+        self.assertNotEqual(mapping_fingerprint(changed.getvalue(), mapping, preview['layout_fingerprint']), fingerprint)
+
     def test_wide_worksheet_within_200_column_limit_previews(self):
         book = Workbook()
         book.active.cell(1, 157, 'synthetic')
@@ -76,6 +149,17 @@ class IngestionTests(unittest.TestCase):
             actual = extract_rows(data, mapping)
             self.assertEqual(actual[0]['exercise_label'], 'Squat')
             self.assertEqual(actual[0]['set_index'], 1)
+
+    def test_row_per_set_actual_correction_has_source_cell(self):
+        data = workbook(['block', 'week', 'session', 'exercise', 'set', 'actual reps'],
+                        [['B1', 'Week1', 'Day1', 'Squat', 1, '5-6']])
+        mapping = {'sheet': 'Week 1', 'header_row': 1, 'columns': {'block': 'A', 'week': 'B',
+                   'session': 'C', 'exercise_label': 'D', 'set_index': 'E', 'actual_reps': 'F'},
+                   'exercise_aliases': {'Squat': 'Squat'}}
+        review = _review_rows(extract_rows(data, mapping), mapping)
+        self.assertEqual(review['correction_cells'][0]['location'], 'Week 1!F2')
+        mapping['cell_overrides'] = {'Week 1!F2': None}
+        self.assertTrue(_review_rows(extract_rows(data, mapping), mapping)['can_approve'])
 
     def test_wide_week_grid_carries_exercise_and_actual_load(self):
         book = Workbook()
