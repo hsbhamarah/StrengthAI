@@ -1,0 +1,579 @@
+openapi: 3.1.0
+info:
+  title: StrengthOS AI local API
+  version: 0.1.0
+  description: Contract baseline. FastAPI-generated OpenAPI must be checked against this file as code is implemented.
+servers:
+  - url: http://127.0.0.1:8000/api/v1
+security:
+  - coachSession: []
+paths:
+  /backups:
+    post:
+      operationId: downloadEncryptedBackup
+      parameters:
+        - {in: header, name: X-CSRF-Token, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [passphrase]
+              properties:
+                passphrase: {type: string, format: password, minLength: 16, maxLength: 1024}
+      responses:
+        '200':
+          description: Verified encrypted database with workbook snapshots
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+  /health:
+    get:
+      security: []
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service state without sensitive data
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, database, ollama]
+                properties:
+                  status: {type: string, enum: [ok, degraded]}
+                  database: {type: string, enum: [ok, unavailable]}
+                  ollama: {type: string, enum: [ok, unavailable]}
+  /auth/setup-status:
+    get:
+      security: []
+      operationId: getCoachSetupStatus
+      responses:
+        '200':
+          description: Whether the one local coach account can be created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [signup_available, needs_email_setup]
+                properties:
+                  signup_available: {type: boolean}
+                  needs_email_setup: {type: boolean}
+  /auth/signup:
+    post:
+      security: []
+      operationId: createCoachAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: {type: string, format: email, minLength: 3, maxLength: 254}
+                password: {type: string, minLength: 12, maxLength: 1024}
+      responses:
+        '201': {description: One local coach account created}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /auth/login:
+    post:
+      security: []
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: {type: string, format: email, minLength: 3, maxLength: 254}
+                password: {type: string, minLength: 1}
+      responses:
+        '200':
+          description: HttpOnly local session cookie issued with CSRF token
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [csrf_token]
+                properties:
+                  csrf_token: {type: string}
+        '401': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /athletes:
+    get:
+      operationId: listAthletes
+      parameters:
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 25}}
+      responses:
+        '200':
+          description: Athlete page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Athlete'}}
+                  next_cursor: {type: [string, 'null']}
+    post:
+      operationId: createAthlete
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [display_name]
+              properties:
+                display_name: {type: string, minLength: 1, maxLength: 120}
+                goal: {type: [string, 'null'], maxLength: 1000}
+      responses:
+        '201':
+          description: Created athlete
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Athlete'}
+        '422': {$ref: '#/components/responses/Error'}
+  /athletes/{athlete_id}:
+    get:
+      operationId: getAthlete
+      parameters: [{$ref: '#/components/parameters/AthleteId'}]
+      responses:
+        '200':
+          description: Athlete
+          content: {application/json: {schema: {$ref: '#/components/schemas/Athlete'}}}
+        '404': {$ref: '#/components/responses/Error'}
+  /athletes/{athlete_id}/blocks:
+    get:
+      operationId: listBlocks
+      parameters: [{$ref: '#/components/parameters/AthleteId'}]
+      responses:
+        '200':
+          description: Training blocks and weeks
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Block'}
+  /athletes/{athlete_id}/sources:
+    get:
+      operationId: listAthleteSources
+      parameters: [{$ref: '#/components/parameters/AthleteId'}]
+      responses:
+        '200':
+          description: Registered Excel sources for this athlete
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [source_id, display_name]
+                      properties:
+                        source_id: {type: string, format: uuid}
+                        display_name: {type: string}
+  /imports/excel:
+    post:
+      operationId: uploadExcel
+      description: Creates a preview job only. Canonical data is not committed until mapping approval and explicit import commit.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [athlete_id, file]
+              properties:
+                athlete_id: {type: string, format: uuid}
+                file: {type: string, format: binary}
+                source_id: {type: string, format: uuid, description: Existing athlete-owned Excel source for a re-import}
+      responses:
+        '202':
+          description: Preview job queued
+          content: {application/json: {schema: {$ref: '#/components/schemas/JobRef'}}}
+        '413': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /imports/{import_id}/preview:
+    get:
+      operationId: getImportPreview
+      parameters: [{$ref: '#/components/parameters/ImportId'}]
+      responses:
+        '200':
+          description: Parsed sheets, candidate mapping, sampled rows, warnings and blocking errors
+          content: {application/json: {schema: {$ref: '#/components/schemas/ImportPreview'}}}
+        '404': {$ref: '#/components/responses/Error'}
+  /imports/{import_id}/commit:
+    post:
+      operationId: commitImport
+      parameters: [{$ref: '#/components/parameters/ImportId'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mapping_id, acknowledged_snapshot_hash]
+              properties:
+                mapping_id: {type: string, format: uuid}
+                acknowledged_snapshot_hash: {type: string, minLength: 64, maxLength: 64}
+      responses:
+        '202':
+          description: Idempotent import job queued
+          content: {application/json: {schema: {$ref: '#/components/schemas/JobRef'}}}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /mappings/{mapping_id}:
+    put:
+      operationId: approveMapping
+      parameters:
+        - {name: mapping_id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MappingApproval'}
+      responses:
+        '200':
+          description: Approved, versioned mapping
+          content: {application/json: {schema: {$ref: '#/components/schemas/MappingApproval'}}}
+        '409': {$ref: '#/components/responses/Error'}
+  /sources/google/connect:
+    post:
+      operationId: startGoogleConnect
+      description: Starts desktop OAuth with state/PKCE and read-only Sheets scope; token callback is local and one-time.
+      responses:
+        '200':
+          description: Local authorization URL and state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorization_url, state]
+                properties:
+                  authorization_url: {type: string, format: uri}
+                  state: {type: string}
+  /sources/{source_id}/sync:
+    post:
+      operationId: syncSource
+      parameters: [{$ref: '#/components/parameters/SourceId'}]
+      responses:
+        '202':
+          description: Sync queued
+          content: {application/json: {schema: {$ref: '#/components/schemas/JobRef'}}}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /athletes/{athlete_id}/analytics:
+    get:
+      operationId: getAnalytics
+      parameters:
+        - {$ref: '#/components/parameters/AthleteId'}
+        - {name: week_id, in: query, schema: {type: string, format: uuid}}
+        - {name: exercise_id, in: query, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: Deterministic metric snapshots with evidence
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [athlete_id, metrics, data_quality, calculation_version]
+                properties:
+                  athlete_id: {type: string, format: uuid}
+                  week_id: {type: [string, 'null'], format: uuid}
+                  metrics: {type: array, items: {$ref: '#/components/schemas/Metric'}}
+                  data_quality: {type: string, enum: [validated, incomplete, blocked]}
+                  calculation_version: {type: string}
+  /athletes/{athlete_id}/recovery:
+    get:
+      operationId: getRecovery
+      parameters: [{$ref: '#/components/parameters/AthleteId'}]
+      responses:
+        '200':
+          description: Weekly recovery status and check-ins
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Recovery'}
+  /analysis-runs:
+    post:
+      operationId: startAnalysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [athlete_id, week_id]
+              properties:
+                athlete_id: {type: string, format: uuid}
+                week_id: {type: string, format: uuid}
+      responses:
+        '202':
+          description: Analysis queued
+          content: {application/json: {schema: {$ref: '#/components/schemas/JobRef'}}}
+  /analysis-runs/{analysis_id}:
+    get:
+      operationId: getAnalysis
+      parameters:
+        - {name: analysis_id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: Analysis status and validated recommendations
+          content: {application/json: {schema: {$ref: '#/components/schemas/Analysis'}}}
+  /ai/chat:
+    post:
+      operationId: askAI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [athlete_id, question]
+              properties:
+                athlete_id: {type: string, format: uuid}
+                conversation_id: {type: [string, 'null'], format: uuid}
+                week_id: {type: [string, 'null'], format: uuid}
+                question: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '202':
+          description: AI response job queued
+          content: {application/json: {schema: {$ref: '#/components/schemas/JobRef'}}}
+  /recommendations:
+    get:
+      operationId: listRecommendations
+      parameters:
+        - {name: athlete_id, in: query, schema: {type: string, format: uuid}}
+        - {name: status, in: query, schema: {type: string, enum: [pending, approved, rejected, deferred]}}
+      responses:
+        '200':
+          description: Coach review queue
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/Recommendation'}}
+  /recommendations/{recommendation_id}/decisions:
+    post:
+      operationId: decideRecommendation
+      parameters:
+        - {name: recommendation_id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: {type: string, enum: [approve, reject, defer]}
+                note: {type: [string, 'null'], maxLength: 2000}
+      responses:
+        '201':
+          description: Decision recorded; no prescription mutation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [decision_id, status]
+                properties:
+                  decision_id: {type: string, format: uuid}
+                  status: {type: string, enum: [approved, rejected, deferred]}
+        '409': {$ref: '#/components/responses/Error'}
+  /ollama/models:
+    get:
+      operationId: listOllamaModels
+      responses:
+        '200':
+          description: Installed local models
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [name]
+                  properties:
+                    name: {type: string}
+                    digest: {type: [string, 'null']}
+                    size_bytes: {type: [integer, 'null']}
+        '503': {$ref: '#/components/responses/Error'}
+  /settings/ai:
+    put:
+      operationId: updateAISettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model, context_tokens, max_output_tokens]
+              properties:
+                model: {type: string}
+                context_tokens: {type: integer, minimum: 512, maximum: 8192}
+                max_output_tokens: {type: integer, minimum: 64, maximum: 2048}
+      responses:
+        '200': {description: Settings saved}
+        '422': {$ref: '#/components/responses/Error'}
+  /backups:
+    post:
+      operationId: createBackup
+      responses:
+        '202':
+          description: Verified backup job queued
+          content: {application/json: {schema: {$ref: '#/components/schemas/JobRef'}}}
+  /jobs/{job_id}:
+    get:
+      operationId: getJob
+      parameters:
+        - {name: job_id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: Durable job state
+          content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}
+components:
+  securitySchemes:
+    coachSession:
+      type: apiKey
+      in: cookie
+      name: strengthos_session
+      description: HttpOnly SameSite cookie; state-changing routes require CSRF protection.
+  parameters:
+    AthleteId: {name: athlete_id, in: path, required: true, schema: {type: string, format: uuid}}
+    ImportId: {name: import_id, in: path, required: true, schema: {type: string, format: uuid}}
+    SourceId: {name: source_id, in: path, required: true, schema: {type: string, format: uuid}}
+  responses:
+    Error:
+      description: Structured error
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+  schemas:
+    Error:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        request_id: {type: string}
+        details: {type: [object, 'null']}
+    Athlete:
+      type: object
+      required: [athlete_id, display_name, status]
+      properties:
+        athlete_id: {type: string, format: uuid}
+        display_name: {type: string}
+        goal: {type: [string, 'null']}
+        status: {type: string, enum: [active, archived]}
+    Block:
+      type: object
+      required: [block_id, athlete_id, label, phase]
+      properties:
+        block_id: {type: string, format: uuid}
+        athlete_id: {type: string, format: uuid}
+        label: {type: string}
+        phase: {type: string}
+        start_date: {type: [string, 'null'], format: date}
+        end_date: {type: [string, 'null'], format: date}
+    JobRef:
+      type: object
+      required: [job_id, state]
+      properties:
+        job_id: {type: string, format: uuid}
+        state: {type: string, enum: [queued, running, completed, failed, cancelled]}
+    Job:
+      allOf:
+        - {$ref: '#/components/schemas/JobRef'}
+        - type: object
+          properties:
+            progress: {type: [number, 'null'], minimum: 0, maximum: 1}
+            error: {$ref: '#/components/schemas/Error'}
+    ImportPreview:
+      type: object
+      required: [import_id, source_snapshot_hash, sheets, sample_rows, issues, can_commit]
+      properties:
+        import_id: {type: string, format: uuid}
+        source_snapshot_hash: {type: string}
+        sheets: {type: array, items: {type: string}}
+        sample_rows: {type: array, items: {type: object}}
+        proposed_mapping: {type: [object, 'null']}
+        issues: {type: array, items: {$ref: '#/components/schemas/ValidationIssue'}}
+        correction_cells:
+          type: array
+          items:
+            type: object
+            required: [location, raw_value]
+            properties:
+              location: {type: string}
+              raw_value: {type: string}
+        can_commit: {type: boolean}
+    ValidationIssue:
+      type: object
+      required: [severity, code, location, message]
+      properties:
+        severity: {type: string, enum: [warning, blocking]}
+        code: {type: string}
+        location: {type: string}
+        message: {type: string}
+    MappingApproval:
+      type: object
+      required: [source_id, layout_fingerprint, mapping]
+      properties:
+        source_id: {type: string, format: uuid}
+        layout_fingerprint: {type: string}
+        mapping: {type: object, additionalProperties: true}
+        approved_version: {type: [integer, 'null']}
+    Metric:
+      type: object
+      required: [key, value, unit, method_version, sample_count, evidence_ids, state]
+      properties:
+        key: {type: string}
+        value: {type: [number, 'null']}
+        unit: {type: [string, 'null']}
+        method_version: {type: string}
+        sample_count: {type: integer, minimum: 0}
+        evidence_ids: {type: array, items: {type: string, format: uuid}}
+        state: {type: string, enum: [valid, stale, insufficient]}
+    Recovery:
+      type: object
+      required: [athlete_id, week_id, state, safety_review]
+      properties:
+        athlete_id: {type: string, format: uuid}
+        week_id: {type: string, format: uuid}
+        state: {type: string, enum: [not_due, pending, incomplete, complete, late, review_required]}
+        safety_review: {type: boolean}
+        sleep_hours: {type: [number, 'null']}
+        readiness: {type: [integer, 'null']}
+        claimed_submitted_at: {type: [string, 'null'], format: date-time}
+        observed_at: {type: [string, 'null'], format: date-time}
+    Analysis:
+      type: object
+      required: [analysis_id, athlete_id, state, recommendations]
+      properties:
+        analysis_id: {type: string, format: uuid}
+        athlete_id: {type: string, format: uuid}
+        state: {type: string, enum: [queued, running, completed, failed, incomplete]}
+        recovery_state: {type: string}
+        recommendations: {type: array, items: {$ref: '#/components/schemas/Recommendation'}}
+    Recommendation:
+      type: object
+      required: [recommendation_id, athlete_id, finding, interpretation, alternatives, evidence_ids, proposed_action, evidence_quality, requires_coach_approval, status]
+      properties:
+        recommendation_id: {type: string, format: uuid}
+        athlete_id: {type: string, format: uuid}
+        finding: {type: string}
+        interpretation: {type: string}
+        alternatives: {type: array, items: {type: string}}
+        evidence_ids: {type: array, items: {type: string, format: uuid}}
+        proposed_action: {type: object, additionalProperties: true}
+        evidence_quality: {type: string, enum: [strong, limited, insufficient]}
+        requires_coach_approval: {type: boolean, const: true}
+        status: {type: string, enum: [pending, approved, rejected, deferred]}
