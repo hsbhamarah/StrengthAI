@@ -4,17 +4,16 @@ This is a separate runtime from the Windows-only coach app. The local app remain
 
 ## Local synthetic preview
 
-Create a fresh, ignored database, then start the portal on loopback:
+Run `run-local.ps1` to build the UI, migrate the ignored preview database, and open the portal on loopback. On first visit, create the coach account in the app and enroll an authenticator; keep its one-time recovery codes private. Existing coach credentials from the older workbook workspace are separate. For a manual start, use:
 
 ```powershell
-$env:STRENGTHOS_DATABASE_URL = 'sqlite:///portal_preview.db'
+$env:STRENGTHOS_DATABASE_URL = 'sqlite:///data/portal_preview.db'
 $env:STRENGTHOS_PUBLIC_ORIGIN = 'http://127.0.0.1:8001'
 .\.venv\Scripts\python.exe -m alembic upgrade head
-.\.venv\Scripts\python.exe -m strengthos.hosted
 .\.venv\Scripts\python.exe -m uvicorn strengthos.hosted:app --host 127.0.0.1 --port 8001
 ```
 
-Run `npm run build` before starting the server. The coach setup command asks for a password and verifies a TOTP authenticator code, then prints eight recovery codes. Store those codes outside the server. The browser opens at `http://127.0.0.1:8001/portal`. This HTTP exception is accepted only for a loopback preview containing synthetic data.
+Run `npm run build` before starting the server. The loopback-only setup screen asks for a password and verifies a TOTP authenticator code, then shows eight recovery codes. Store those codes outside the server. The browser opens at `http://127.0.0.1:8001/portal`. Use **Create weekly plan** to build a week, publish it, choose a client and start date, and assign it. Use **Copy as next week** to make an editable new draft; publishing and assigning it preserves the prior week and its actuals. This HTTP exception is accepted only for a loopback preview containing synthetic data. Invite links cannot be used from a client's device until the portal is deployed publicly with HTTPS.
 
 ## India-hosted deployment
 
@@ -36,7 +35,7 @@ On a fresh hosted database that already has its coach account, run `python -m st
 
 ## Security and operation limits
 
-- Coach registration is command-line only. Client invitations expire after 72 hours and can be revoked or reissued; reissuing revokes old sessions. The coach uses password plus TOTP or a one-time recovery code. Clients use passwords of at least 12 characters. Account deactivation revokes sessions.
+- Public coach registration is command-line only; the loopback preview permits one-time coach enrollment in the UI. Client invitations expire after 72 hours and can be revoked or reissued; reissuing revokes old sessions. The coach uses password plus TOTP or a one-time recovery code. Clients use passwords of at least 12 characters. Account deactivation revokes sessions.
 - Sessions are stored server-side, expire after eight hours or one hour idle, and use secure same-origin cookies in production. Writes require a CSRF token and matching Origin. Login attempts are limited in the single worker. The app must remain one worker until throttling moves to a shared store.
 - Client queries are filtered by their athlete ID at the database boundary. The coach can inspect set and recovery revision history. A client can correct only their own prescribed sets and weeks. Missing, failed, skipped, and completed actuals remain distinct.
 - Workbook uploads are coach-only, capped at 10 MB and 100 MB archive expansion, parsed as inert `.xlsx` data, and dropped after draft approval or 24 hours. Preview and snapshot hashes must match before approval. Imported actuals do not enter a new program draft.

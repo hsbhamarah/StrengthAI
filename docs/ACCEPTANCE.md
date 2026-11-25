@@ -13,6 +13,7 @@
 | HP-07 | Export approved local records, reject wrong passphrase, inspect counts, import into fresh hosted DB, retry. | Export encrypted; credentials/workbook binaries absent; first reviewed import succeeds, retry refuses duplicate data. |
 | HP-08 | Deploy to OCI Mumbai, inspect network/headers, run backup timer and restore to separate DB. | Site/API use HTTPS; Postgres/API bind locally; data/backups stay in Mumbai; restore counts match before real clients. |
 | HP-09 | Review mobile layouts at 320/390 pixels, keyboard access, screen reader names, and session expiry. | Client can complete a session and recovery on a phone; private data hidden after logout/expiry. |
+| HP-10 | Start the local launcher, enroll the first coach in the portal UI, create and assign a weekly plan, then publish and assign the next week. | The portal opens with a visible Create weekly plan action; client sees the new week while prior actuals remain available. Local invite links are labelled as local-only. Public registration remains closed. |
 
 Do not mark HP-08 or HP-09 passed without a real hosted/manual run. Existing AT-01–AT-19 below describe the legacy local-first scope.
 

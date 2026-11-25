@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime, timedelta, timezone
 from getpass import getpass
 from pathlib import Path
+from threading import Lock
 from uuid import uuid4
 
 from argon2 import PasswordHasher
@@ -190,6 +191,16 @@ class InviteAcceptance(BaseModel):
     password: str = Field(min_length=12, max_length=1024)
 
 
+class CoachSetupStart(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=12, max_length=1024)
+
+
+class CoachSetupFinish(BaseModel):
+    enrollment_id: str = Field(min_length=40, max_length=200)
+    mfa_code: str = Field(min_length=6, max_length=6)
+
+
 class InviteInput(BaseModel):
     email: str = Field(min_length=3, max_length=254)
 
@@ -210,6 +221,60 @@ def email_key(value: str) -> str:
 def health(session: DBSession = Depends(db)):
     session.execute(select(func.count()).select_from(Account)).scalar()
     return {"status": "ok"}
+
+
+setup_lock = Lock()
+setup_pending: dict[str, dict] = {}
+
+
+@app.get("/api/v1/auth/setup-status")
+def setup_status(session: DBSession = Depends(db)):
+    return {"signup_available": DEV and not bool(session.scalar(select(Account.account_id).where(Account.role == "coach").limit(1)))}
+
+
+@app.post("/api/v1/auth/setup/start")
+def setup_start(payload: CoachSetupStart, session: DBSession = Depends(db)):
+    if not DEV:
+        raise HTTPException(404, "Unavailable")
+    with setup_lock:
+        if not setup_status(session)["signup_available"]:
+            raise HTTPException(409, "Coach account already exists")
+        for ident, item in list(setup_pending.items()):
+            if item["expires"] <= time.monotonic():
+                del setup_pending[ident]
+        if len(setup_pending) >= 3:
+            raise HTTPException(429, "Try again later")
+        ident = secrets.token_urlsafe(32)
+        secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+        setup_pending[ident] = {"email": email_key(payload.email), "password_hash": hasher.hash(payload.password),
+                                "secret": secret, "expires": time.monotonic() + 600, "attempts": 0}
+    return {"enrollment_id": ident, "totp_secret": secret, "expires_in_seconds": 600}
+
+
+@app.post("/api/v1/auth/setup/finish", status_code=201)
+def setup_finish(payload: CoachSetupFinish, session: DBSession = Depends(db)):
+    if not DEV:
+        raise HTTPException(404, "Unavailable")
+    with setup_lock:
+        if not setup_status(session)["signup_available"]:
+            raise HTTPException(409, "Coach account already exists")
+        item = setup_pending.get(payload.enrollment_id)
+        if not item or item["expires"] <= time.monotonic() or item["attempts"] >= 5:
+            setup_pending.pop(payload.enrollment_id, None)
+            raise HTTPException(404, "Enrollment expired")
+        item["attempts"] += 1
+        if not (payload.mfa_code.isdecimal() and any(secrets.compare_digest(totp(item["secret"], int(time.time()) + offset), payload.mfa_code)
+                                                       for offset in (-30, 0, 30))):
+            raise HTTPException(422, "Authenticator code did not match")
+        codes = [secrets.token_hex(8).upper() for _ in range(8)]
+        account = Account(account_id=uid(), role="coach", athlete_id=None, email=item["email"],
+                          password_hash=item["password_hash"], mfa_secret=item["secret"],
+                          recovery_hashes_json=json.dumps([digest(code) for code in codes]), created_at=stamp())
+        session.add(account)
+        audit(session, account, "coach_created")
+        session.commit()
+        setup_pending.clear()
+    return {"recovery_codes": codes}
 
 
 @app.post("/api/v1/auth/login")

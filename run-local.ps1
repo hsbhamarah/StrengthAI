@@ -1,4 +1,4 @@
-param([ValidateSet('setup', 'api', 'web')][string]$Mode = 'setup')
+param([ValidateSet('setup', 'api', 'portal', 'web')][string]$Mode = 'setup')
 
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
@@ -12,13 +12,21 @@ $python = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 $npm = 'C:\Program Files\nodejs\npm.cmd'
 
 if ($Mode -eq 'api') {
+    Remove-Item Env:STRENGTHOS_DATABASE_URL -ErrorAction SilentlyContinue
     & $python -m uvicorn strengthos.main:app --host 127.0.0.1 --port 8000 --no-access-log
+    exit $LASTEXITCODE
+}
+if ($Mode -eq 'portal') {
+    $env:STRENGTHOS_DATABASE_URL = 'sqlite:///data/portal_preview.db'
+    $env:STRENGTHOS_PUBLIC_ORIGIN = 'http://127.0.0.1:8001'
+    & $python -m uvicorn strengthos.hosted:app --host 127.0.0.1 --port 8001 --no-access-log
     exit $LASTEXITCODE
 }
 if ($Mode -eq 'web') {
     & $npm run dev
     exit $LASTEXITCODE
 }
+Remove-Item Env:STRENGTHOS_DATABASE_URL -ErrorAction SilentlyContinue
 
 Set-Content -LiteralPath 'data\run-status.txt' -Value 'Creating Python environment'
 if (-not (Test-Path -LiteralPath $python)) {
@@ -78,17 +86,26 @@ if ($needsEmail -eq '1') {
     if ($LASTEXITCODE -ne 0) { throw 'Coach account setup failed' }
 }
 
+$env:STRENGTHOS_DATABASE_URL = 'sqlite:///data/portal_preview.db'
+$env:STRENGTHOS_PUBLIC_ORIGIN = 'http://127.0.0.1:8001'
+& $python -m alembic upgrade head
+if ($LASTEXITCODE -ne 0) { throw 'Portal database migration failed' }
+Remove-Item Env:STRENGTHOS_DATABASE_URL -ErrorAction SilentlyContinue
+Remove-Item Env:STRENGTHOS_PUBLIC_ORIGIN -ErrorAction SilentlyContinue
+
 Set-Content -LiteralPath 'data\run-status.txt' -Value 'Starting services'
 $shell = (Get-Command powershell.exe).Source
-Start-Process -FilePath $shell -ArgumentList @('-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '.\run-local.ps1', '-Mode', 'api') -WorkingDirectory $PSScriptRoot -WindowStyle Hidden
+try { $legacyRunning = (Invoke-RestMethod 'http://127.0.0.1:8000/api/v1/health' -TimeoutSec 2).status -eq 'ok' } catch { $legacyRunning = $false }
+if (-not $legacyRunning) { Start-Process -FilePath $shell -ArgumentList @('-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '.\run-local.ps1', '-Mode', 'api') -WorkingDirectory $PSScriptRoot -WindowStyle Hidden }
+try { $portalRunning = (Invoke-RestMethod 'http://127.0.0.1:8001/api/v1/health' -TimeoutSec 2).status -eq 'ok' } catch { $portalRunning = $false }
+if (-not $portalRunning) { Start-Process -FilePath $shell -ArgumentList @('-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '.\run-local.ps1', '-Mode', 'portal') -WorkingDirectory $PSScriptRoot -WindowStyle Hidden }
 
 Start-Sleep -Seconds 5
 try {
     $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/v1/health' -TimeoutSec 5
-    $page = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8000' -TimeoutSec 5
+    $page = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8001/portal' -TimeoutSec 5
     if ($health.status -ne 'ok' -or $page.StatusCode -ne 200) { throw 'Health check failed' }
-    $setup = Invoke-RestMethod 'http://127.0.0.1:8000/api/v1/auth/setup-status'
-    $landing = if ($setup.signup_available) { 'http://127.0.0.1:8000/sign-up' } else { 'http://127.0.0.1:8000/sign-in' }
+    $landing = 'http://127.0.0.1:8001/portal'
     Set-Content -LiteralPath 'data\run-status.txt' -Value "Running at $landing"
     Start-Process $landing
     Write-Host "StrengthOS AI is running at $landing"

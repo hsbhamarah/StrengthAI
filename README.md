@@ -4,13 +4,13 @@
 
 ## Current direction: coach and client portal
 
-The coach requested a hosted mobile web app for publishing programs and collecting client actuals and weekly recovery. A separate FastAPI entry point, `strengthos.hosted:app`, implements the portal while `strengthos.main:app` remains the Windows-local app. Read [the hosted portal guide](docs/HOSTED_PORTAL.md) for setup, India-region deployment gates, security, and reviewed data transfer. The portal has not been deployed publicly; the existing loopback app remains the live local instance.
+The coach requested a hosted mobile web app for publishing weekly plans and collecting client actuals and weekly recovery. The launcher now opens the program portal at `http://127.0.0.1:8001/portal`; the older encrypted workbook workspace remains at `http://127.0.0.1:8000/sign-in` and links to it. The portal uses a separate local preview database, so these workspaces do not share athlete records. Read [the hosted portal guide](docs/HOSTED_PORTAL.md) for setup, India-region deployment gates, security, and reviewed data transfer. The portal has not been deployed publicly; local invite links work only on this computer.
 
 The portal supports reusable drafts, immutable published versions, client assignments, expiring invites, client set and recovery entries, history, and an Excel-to-draft preview. Run `python -m unittest tests.test_portal -v` and `npm run build` during development. No real client should be invited until Mumbai deployment, backup restoration, and acceptance checks pass.
 
 ## Development startup
 
-Use Python 3.12 and Node.js. In a normal PowerShell window with access to PyPI and npm, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run-local.ps1` from this folder. The script creates the local Python environment, installs missing API and React dependencies, builds the UI, initializes SQLite, and starts FastAPI with the built frontend on loopback. On first run it opens `http://127.0.0.1:8000/sign-up` to create the one local coach account. Later runs reuse installed packages and can start offline. Install logs and status are kept under ignored `data/`.
+Use Python 3.12 and Node.js. In a normal PowerShell window with access to PyPI and npm, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run-local.ps1` from this folder. The script builds the UI, initializes the legacy encrypted workspace and a separate synthetic portal preview, starts both loopback services, and opens `http://127.0.0.1:8001/portal`. On first visit, create the portal coach account in the app and enroll an authenticator. Later runs reuse installed packages and accounts. Install logs and status are kept under ignored `data/`.
 
 If the app is already running without a coach account, open `http://127.0.0.1:8000/sign-up`. An existing password-only account can run `.\.venv\Scripts\python.exe -m strengthos.setup` to add its email after confirming the current password.
 

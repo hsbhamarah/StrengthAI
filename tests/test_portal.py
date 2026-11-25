@@ -112,6 +112,14 @@ class PortalTests(unittest.TestCase):
             self.assertEqual(len(db.scalars(select(ActualRevision)).all()), 2)
             self.assertEqual(len(db.scalars(select(RecoveryRevision)).all()), 2)
         self.assertEqual(len(self.coach.get(f"/api/v1/athletes/{athletes[0]}/history").json()["actuals"]), 2)
+        next_version = self.coach.post(f"/api/v1/templates/{template_id}/publish").json()["version_id"]
+        self.assertEqual(self.coach.post(f"/api/v1/versions/{next_version}/assign", json={
+            "athlete_ids": [athletes[0]], "start_date": "2026-12-08"}).status_code, 201)
+        weeks = a.get("/api/v1/me/program").json()["assignments"]
+        self.assertEqual(len(weeks), 2)
+        self.assertEqual(weeks[0]["weeks"][0]["sessions"][0]["exercises"][0]["sets"][0]["target_reps"], 10)
+        self.assertIsNone(weeks[0]["weeks"][0]["sessions"][0]["exercises"][0]["sets"][0]["actual"])
+        self.assertEqual(weeks[1]["weeks"][0]["sessions"][0]["exercises"][0]["sets"][0]["actual"]["status"], "skipped")
 
     def test_mfa_and_invite_scope(self):
         bad = TestClient(hosted.app, base_url=ORIGIN, headers={"Origin": ORIGIN})
@@ -127,6 +135,39 @@ class PortalTests(unittest.TestCase):
         self.assertEqual(user.get("/api/v1/me/program").status_code, 401)
         self.assertEqual(bad.post("/api/v1/auth/invites/accept", json={
             "token": pending["url"].split("token=")[1], "password": "new-password-123"}).status_code, 404)
+
+    def test_loopback_coach_enrollment_closes_after_first_account(self):
+        fresh = make_engine("sqlite:///" + str(Path(self.temp.name) / "setup.db"))
+        try:
+            with patch("strengthos.db.engine", fresh):
+                command.upgrade(Config("alembic.ini"), "head")
+            with patch.object(hosted, "SessionLocal", sessionmaker(fresh)):
+                browser = TestClient(hosted.app, base_url=ORIGIN, headers={"Origin": ORIGIN})
+                self.assertTrue(browser.get("/api/v1/auth/setup-status").json()["signup_available"])
+                started = browser.post("/api/v1/auth/setup/start", json={
+                    "email": "newcoach@example.com", "password": "new-coach-password-123"})
+                self.assertEqual(started.status_code, 200, started.text)
+                enrollment = started.json()
+                self.assertEqual(browser.post("/api/v1/auth/setup/finish", json={
+                    "enrollment_id": enrollment["enrollment_id"], "mfa_code": "000000"}).status_code, 422)
+                finished = browser.post("/api/v1/auth/setup/finish", json={
+                    "enrollment_id": enrollment["enrollment_id"],
+                    "mfa_code": hosted.totp(enrollment["totp_secret"])})
+                self.assertEqual(finished.status_code, 201, finished.text)
+                self.assertEqual(len(finished.json()["recovery_codes"]), 8)
+                self.assertFalse(browser.get("/api/v1/auth/setup-status").json()["signup_available"])
+                self.assertEqual(browser.post("/api/v1/auth/setup/start", json={
+                    "email": "second@example.com", "password": "new-coach-password-123"}).status_code, 409)
+                self.assertEqual(browser.post("/api/v1/auth/login", json={
+                    "email": "newcoach@example.com", "password": "new-coach-password-123",
+                    "mfa_code": hosted.totp(enrollment["totp_secret"])}).status_code, 200)
+                with patch.object(hosted, "DEV", False):
+                    self.assertEqual(browser.get("/api/v1/auth/setup-status").json()["signup_available"], False)
+                    self.assertEqual(browser.post("/api/v1/auth/setup/start", json={
+                        "email": "public@example.com", "password": "new-coach-password-123"}).status_code, 404)
+        finally:
+            hosted.setup_pending.clear()
+            fresh.dispose()
 
     def test_session_revocation_and_invite_expiry(self):
         athlete = self.coach.post("/api/v1/athletes", json={"display_name": "Client"}).json()["athlete_id"]

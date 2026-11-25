@@ -2,6 +2,8 @@
 
 All paths use `/api/v1`. Public operations: `POST /auth/login` (email, password, optional coach MFA code), `POST /auth/invites/accept` (single-use token and new password), and `GET /health`. A successful login returns a CSRF token and sets an HTTP-only session cookie. All subsequent writes require `X-CSRF-Token` and same Origin. `GET /auth/me`, `GET /auth/sessions`, `POST /auth/sessions/revoke-others`, `POST /auth/logout`, and `POST /auth/password` require a session.
 
+On a loopback preview only, `GET /auth/setup-status`, `POST /auth/setup/start`, and `POST /auth/setup/finish` enroll the first coach with password and verified TOTP, then return one-time recovery codes. Public HTTPS deployments retain command-line-only coach registration.
+
 Coach-only operations:
 
 | Method and path | Result |
