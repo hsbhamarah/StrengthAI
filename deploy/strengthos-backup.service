@@ -1,0 +1,16 @@
+[Unit]
+Description=Back up StrengthOS to Mumbai Object Storage
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=strengthos
+Group=strengthos
+WorkingDirectory=/opt/strengthos
+EnvironmentFile=/etc/strengthos/hosted.env
+ExecStart=/bin/sh /opt/strengthos/deploy/backup.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/strengthos

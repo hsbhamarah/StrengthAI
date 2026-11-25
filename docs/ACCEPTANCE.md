@@ -1,5 +1,21 @@
 # MVP acceptance tests
 
+## Hosted portal acceptance (new priority)
+
+| ID | Scenario | Expected outcome |
+| --- | --- | --- |
+| HP-01 | Coach enrolls TOTP, signs in, creates two clients, issues one-time invites. | Wrong MFA fails; used/expired/revoked invites fail; each client signs in only to their own account. |
+| HP-02 | Build template, publish version 1, edit draft, assign version 1 to two clients. | Both see independent scheduled prescriptions from original immutable snapshot; only coach can publish or assign. |
+| HP-03 | Client A enters failed zero-rep, skipped, completed, and missing sets; then corrects one. | States remain distinct; revision records prior/new values and actor; metrics use current actuals. |
+| HP-04 | Client A submits incomplete then complete recovery with pain note. | Training analytics remain available; weekly review is incomplete when needed; note triggers coach review and prior values remain auditable. |
+| HP-05 | Client B sends Client A's set, week, and athlete IDs to read/write paths. | No data returned or changed; coach-only program, history, import, audit endpoints reject clients. |
+| HP-06 | Upload malformed/oversize `.xlsx`, preview valid rows, change mapping after preview, approve. | Unsafe file rejected; changed mapping needs fresh preview; actuals never enter a new draft. |
+| HP-07 | Export approved local records, reject wrong passphrase, inspect counts, import into fresh hosted DB, retry. | Export encrypted; credentials/workbook binaries absent; first reviewed import succeeds, retry refuses duplicate data. |
+| HP-08 | Deploy to OCI Mumbai, inspect network/headers, run backup timer and restore to separate DB. | Site/API use HTTPS; Postgres/API bind locally; data/backups stay in Mumbai; restore counts match before real clients. |
+| HP-09 | Review mobile layouts at 320/390 pixels, keyboard access, screen reader names, and session expiry. | Client can complete a session and recovery on a phone; private data hidden after logout/expiry. |
+
+Do not mark HP-08 or HP-09 passed without a real hosted/manual run. Existing AT-01–AT-19 below describe the legacy local-first scope.
+
 Use synthetic data for automated tests; repeat critical ingestion and performance tests with coach-approved reference workbooks on the actual Windows 8 GB machine. Every test must record fixture version and result. No P0 test may be waived silently.
 
 | ID | Scenario | Expected outcome |

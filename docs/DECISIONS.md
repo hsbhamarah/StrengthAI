@@ -1,5 +1,11 @@
 # Assumptions and open decisions
 
+## Hosted portal direction, 2026-11-25
+
+- The coach changed the MVP direction to a hosted mobile web app. One coach builds and imports reusable programs, publishes immutable versions, assigns client-specific copies, and invites clients with one-time links. Clients enter and correct their own prescribed-set actuals and weekly recovery; corrections retain history. This supersedes D-01, D-02, D-03, D-05, D-07, ADR-001, ADR-002, and ADR-006 for the **new hosted runtime**. The local runtime remains a migration source.
+- The coach selected one coach account, scheduled assignments from a start date, prescribed sets only, India-hosted training data, AI later, and free hosting for now. If OCI Mumbai Always Free capacity is unavailable, work remains local until free capacity is available. Netlify was considered for the frontend; the coach chose one Mumbai server for site and API.
+- Hosted code and synthetic checks are under implementation. No public deployment, real-data transfer, backup restore, performance measurement, or client invitation has been completed. Transfer requires a reviewed encrypted export and explicit import; no workbook binaries or credentials are included.
+
 ## Reusable training-grid mappings, 2026-11-25
 
 - The importer now suggests training tabs by finding repeated `Week N` / `sets` headers beyond the first row. The coach can change selected tabs, header rows, day/exercise columns, week columns, block labels, units, and aliases before a read-only mapped-set preview. Only an explicit mapping approval followed by commit writes canonical sets.

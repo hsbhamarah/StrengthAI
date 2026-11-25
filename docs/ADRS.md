@@ -1,5 +1,13 @@
 # Architecture decision records
 
+## ADR-008 — Hosted coach and client portal (new direction)
+
+**Decision:** The public portal serves React and FastAPI from one HTTPS origin on an OCI Mumbai VM. PostgreSQL is the shared system of record. One coach uses TOTP; invited clients see only assigned published programs and enter actuals and recovery. Drafts are editable, versions immutable, and assignments materialize separate prescriptions per athlete. The local Windows runtime remains a migration source. **Reason:** Clients need direct access from their own devices. **Consequences:** India placement, public-service security, backup restoration, and concurrent-write tests are release gates. This supersedes ADR-001/002/006 for the hosted runtime.
+
+## ADR-009 — Public access and data boundary
+
+**Decision:** Closed coach registration, hashed one-time invites, server-side sessions, TOTP for the coach, Origin and CSRF checks, deny-by-default role/athlete scoping, bounded inert workbook parsing, revisions, and metadata-only audit events. Public access is through HTTPS reverse proxy; API and database bind locally. **Reason:** Client training and recovery information must remain private and coach-authored prescriptions authoritative. **Consequences:** Keep one worker until login throttling moves to a shared store; back up and patch the VM.
+
 Each record is accepted for the MVP unless an open decision in `DECISIONS.md` changes it.
 
 ## ADR-001 — Local-first process topology

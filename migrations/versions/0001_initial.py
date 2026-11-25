@@ -12,7 +12,9 @@ branch_labels = None
 depends_on = None
 
 def upgrade():
-    Base.metadata.create_all(bind=op.get_bind())
+    names = {"athletes", "training_blocks", "training_weeks", "sessions", "exercises", "exercise_prescriptions", "prescribed_sets", "actual_sets", "data_sources", "mapping_profiles", "import_jobs", "source_records", "record_revisions", "job_queue"}
+    Base.metadata.create_all(bind=op.get_bind(), tables=[Base.metadata.tables[name] for name in names])
 
 def downgrade():
-    Base.metadata.drop_all(bind=op.get_bind())
+    names = {"athletes", "training_blocks", "training_weeks", "sessions", "exercises", "exercise_prescriptions", "prescribed_sets", "actual_sets", "data_sources", "mapping_profiles", "import_jobs", "source_records", "record_revisions", "job_queue"}
+    Base.metadata.drop_all(bind=op.get_bind(), tables=[Base.metadata.tables[name] for name in names])

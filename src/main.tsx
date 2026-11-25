@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
+import HostedApp from './hosted';
 
 type Athlete = { athlete_id: string; display_name: string; goal: string | null; status: string };
 type Source = { source_id: string; display_name: string };
@@ -354,4 +355,7 @@ function App() {
   </div>;
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  window.location.pathname.startsWith('/portal') || window.location.pathname === '/invite'
+    ? <HostedApp /> : <App />
+);

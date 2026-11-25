@@ -1,5 +1,17 @@
 # Prioritized implementation backlog
 
+## Hosted portal pivot (priority over the legacy backlog below)
+
+| Order | Work item | Done when |
+| --- | --- | --- |
+| H1 | Portal schema, secure account/invite/session boundary, templates and publishing | Fresh and upgraded migrations pass; coach/client scope and publish immutability pass contract tests. |
+| H2 | Client actuals, recovery, revisions and mobile UI | Two invited clients log separate programs; corrections preserve history; missing/failed/skipped remain distinct. |
+| H3 | Coach-approved Excel-to-draft path and encrypted local transfer | Preview and hash approval precede draft creation; reviewed transfer excludes workbook binaries/credentials and imports into a fresh database. |
+| H4 | Mumbai deployment, HTTPS, restricted database, daily backups and restore | Region and free-resource status verified; backup restored to separate DB; real-client invitation gate passes. |
+| H5 | Security, accessibility, performance and acceptance | Cross-client, MFA, CSRF, upload, mobile, backup, and target-VM checks measured and recorded. |
+
+The old M3 Google Sheets and M4 Ollama items follow the portal data path if still wanted. They are not portal release blockers.
+
 Each item is an independently reviewable slice. `P0` is required for MVP; `P1` follows a working MVP. Dependencies refer to item IDs. Use synthetic fixtures until real workbook access is approved.
 
 | ID | Priority | Work item | Depends on | Done when |

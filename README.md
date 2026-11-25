@@ -2,6 +2,12 @@
 
 **Requirements baseline:** v0.4–v0.6 of the referenced design conversation, prepared 2026-11-16. The repository now includes an early local implementation; the full P0 MVP is not complete.
 
+## Current direction: coach and client portal
+
+The coach requested a hosted mobile web app for publishing programs and collecting client actuals and weekly recovery. A separate FastAPI entry point, `strengthos.hosted:app`, implements the portal while `strengthos.main:app` remains the Windows-local app. Read [the hosted portal guide](docs/HOSTED_PORTAL.md) for setup, India-region deployment gates, security, and reviewed data transfer. The portal has not been deployed publicly; the existing loopback app remains the live local instance.
+
+The portal supports reusable drafts, immutable published versions, client assignments, expiring invites, client set and recovery entries, history, and an Excel-to-draft preview. Run `python -m unittest tests.test_portal -v` and `npm run build` during development. No real client should be invited until Mumbai deployment, backup restoration, and acceptance checks pass.
+
 ## Development startup
 
 Use Python 3.12 and Node.js. In a normal PowerShell window with access to PyPI and npm, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run-local.ps1` from this folder. The script creates the local Python environment, installs missing API and React dependencies, builds the UI, initializes SQLite, and starts FastAPI with the built frontend on loopback. On first run it opens `http://127.0.0.1:8000/sign-up` to create the one local coach account. Later runs reuse installed packages and can start offline. Install logs and status are kept under ignored `data/`.

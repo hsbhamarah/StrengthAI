@@ -1,0 +1,22 @@
+[Unit]
+Description=StrengthOS client portal
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=strengthos
+Group=strengthos
+WorkingDirectory=/opt/strengthos
+EnvironmentFile=/etc/strengthos/hosted.env
+ExecStart=/opt/strengthos/.venv/bin/uvicorn strengthos.hosted:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/strengthos
+
+[Install]
+WantedBy=multi-user.target

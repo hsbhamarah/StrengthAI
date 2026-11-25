@@ -5,7 +5,7 @@ from pathlib import Path
 
 from sqlalchemy import CheckConstraint, ForeignKey, Index, UniqueConstraint, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
-from sqlalchemy.types import Float, Integer, String, Text
+from sqlalchemy.types import Float, Integer, LargeBinary, String, Text
 
 
 class Base(DeclarativeBase):
@@ -191,6 +191,128 @@ class JobQueue(Base):
     updated_at: Mapped[str] = mapped_column(String(40))
 
 
+class Account(Base):
+    __tablename__ = "accounts"
+    account_id: Mapped[str] = id_column()
+    athlete_id: Mapped[str | None] = mapped_column(ForeignKey("athletes.athlete_id"), unique=True)
+    role: Mapped[str] = mapped_column(String(10))
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    mfa_secret: Mapped[str | None] = mapped_column(String(64))
+    recovery_hashes_json: Mapped[str | None] = mapped_column(Text)
+    disabled_at: Mapped[str | None] = mapped_column(String(40))
+    created_at: Mapped[str] = mapped_column(String(40))
+    __table_args__ = (CheckConstraint("(role = 'coach' AND athlete_id IS NULL) OR (role = 'client' AND athlete_id IS NOT NULL)"),)
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    session_id: Mapped[str] = id_column()
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    csrf_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[str] = mapped_column(String(40))
+    touched_at: Mapped[str] = mapped_column(String(40))
+    expires_at: Mapped[str] = mapped_column(String(40))
+    revoked_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class ClientInvite(Base):
+    __tablename__ = "client_invites"
+    invite_id: Mapped[str] = id_column()
+    athlete_id: Mapped[str] = mapped_column(ForeignKey("athletes.athlete_id"), index=True)
+    email: Mapped[str] = mapped_column(String(254))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[str] = mapped_column(String(40))
+    used_at: Mapped[str | None] = mapped_column(String(40))
+    revoked_at: Mapped[str | None] = mapped_column(String(40))
+    created_at: Mapped[str] = mapped_column(String(40))
+
+
+class ProgramTemplate(Base):
+    __tablename__ = "program_templates"
+    template_id: Mapped[str] = id_column()
+    name: Mapped[str] = mapped_column(String(120))
+    draft_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(40))
+    updated_at: Mapped[str] = mapped_column(String(40))
+
+
+class TemplateImport(Base):
+    __tablename__ = "template_imports"
+    import_id: Mapped[str] = id_column()
+    filename: Mapped[str] = mapped_column(String(255))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    content: Mapped[bytes | None] = mapped_column(LargeBinary)
+    created_at: Mapped[str] = mapped_column(String(40))
+    expires_at: Mapped[str] = mapped_column(String(40))
+    preview_mapping_hash: Mapped[str | None] = mapped_column(String(64))
+    previewed_at: Mapped[str | None] = mapped_column(String(40))
+    committed_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class ProgramVersion(Base):
+    __tablename__ = "program_versions"
+    version_id: Mapped[str] = id_column()
+    template_id: Mapped[str] = mapped_column(ForeignKey("program_templates.template_id"), index=True)
+    version_no: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(120))
+    snapshot_json: Mapped[str] = mapped_column(Text)
+    published_at: Mapped[str] = mapped_column(String(40))
+    __table_args__ = (UniqueConstraint("template_id", "version_no"),)
+
+
+class ProgramAssignment(Base):
+    __tablename__ = "program_assignments"
+    assignment_id: Mapped[str] = id_column()
+    athlete_id: Mapped[str] = mapped_column(ForeignKey("athletes.athlete_id"), index=True)
+    version_id: Mapped[str] = mapped_column(ForeignKey("program_versions.version_id"))
+    block_id: Mapped[str] = mapped_column(ForeignKey("training_blocks.block_id"), unique=True)
+    start_date: Mapped[str] = mapped_column(String(10))
+    active: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[str] = mapped_column(String(40))
+
+
+class ActualRevision(Base):
+    __tablename__ = "actual_revisions"
+    revision_id: Mapped[str] = id_column()
+    actual_set_id: Mapped[str] = mapped_column(ForeignKey("actual_sets.actual_set_id"), index=True)
+    actor_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"))
+    prior_json: Mapped[str | None] = mapped_column(Text)
+    new_json: Mapped[str] = mapped_column(Text)
+    changed_at: Mapped[str] = mapped_column(String(40))
+
+
+class RecoveryCheckin(Base):
+    __tablename__ = "recovery_checkins"
+    checkin_id: Mapped[str] = id_column()
+    athlete_id: Mapped[str] = mapped_column(ForeignKey("athletes.athlete_id"), index=True)
+    week_id: Mapped[str] = mapped_column(ForeignKey("training_weeks.week_id"), unique=True)
+    sleep_hours: Mapped[float | None] = mapped_column(Float)
+    readiness: Mapped[int | None] = mapped_column(Integer)
+    pain_notes: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(String(40))
+
+
+class RecoveryRevision(Base):
+    __tablename__ = "recovery_revisions"
+    revision_id: Mapped[str] = id_column()
+    checkin_id: Mapped[str] = mapped_column(ForeignKey("recovery_checkins.checkin_id"), index=True)
+    actor_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"))
+    prior_json: Mapped[str | None] = mapped_column(Text)
+    new_json: Mapped[str] = mapped_column(Text)
+    changed_at: Mapped[str] = mapped_column(String(40))
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    event_id: Mapped[str] = id_column()
+    actor_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"))
+    action: Mapped[str] = mapped_column(String(60))
+    target_id: Mapped[str | None] = mapped_column(String(36))
+    occurred_at: Mapped[str] = mapped_column(String(40))
+
+
 def make_engine(url: str | None = None):
     if url is None:
         from strengthos.storage import connect, device_key, private_dir
@@ -215,5 +337,5 @@ def make_engine(url: str | None = None):
     return engine
 
 
-engine = make_engine()
+engine = make_engine(os.environ.get("STRENGTHOS_DATABASE_URL"))
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
