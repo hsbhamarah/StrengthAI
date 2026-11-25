@@ -79,6 +79,12 @@ class SecurityTests(unittest.TestCase):
                     source = uploaded.json()["source_id"]
                     self.assertEqual(client.post("/api/v1/imports/excel", data={"athlete_id": athletes[1], "source_id": source}, files=files).status_code, 404)
                     self.assertEqual(client.post("/api/v1/imports/excel", data={"athlete_id": athletes[0]}, files={"file": ("bad.xlsx", b"invalid")}).status_code, 422)
+                    book.active.cell(1, 201, "synthetic")
+                    buf = io.BytesIO()
+                    book.save(buf)
+                    limited = client.post("/api/v1/imports/excel", data={"athlete_id": athletes[0]}, files={"file": ("wide.xlsx", buf.getvalue())})
+                    self.assertEqual(limited.status_code, 422)
+                    self.assertIn("200 columns", limited.json()["detail"])
                     self.assertEqual(client.get("/.git/config").status_code, 404)
                     response = client.post("/api/v1/backups", json={"passphrase": "synthetic backup passphrase"})
                     self.assertEqual(response.status_code, 200)

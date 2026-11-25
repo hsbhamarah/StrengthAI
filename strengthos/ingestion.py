@@ -18,7 +18,11 @@ from openpyxl.utils.cell import column_index_from_string, get_column_letter
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_SHEETS = 30
 MAX_ROWS = 20000
-MAX_COLUMNS = 100
+MAX_COLUMNS = 200
+
+
+class WorkbookLimitError(ValueError):
+    pass
 
 FIELDS = (
     "block", "week", "session", "exercise_label", "set_index", "set_type",
@@ -31,31 +35,31 @@ REQUIRED = {"block", "week", "session", "exercise_label", "set_index"}
 
 def inspect_workbook(data: bytes) -> dict[str, Any]:
     if len(data) > MAX_UPLOAD_BYTES:
-        raise ValueError("Workbook exceeds 10 MB")
+        raise WorkbookLimitError("Workbook exceeds 10 MB")
     if not data[:4] == b"PK\x03\x04":
         raise ValueError("Only valid .xlsx archives are supported")
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             if len(archive.infolist()) > 1000 or sum(item.file_size for item in archive.infolist()) > 100 * 1024 * 1024:
-                raise ValueError("Workbook archive exceeds expansion limit")
+                raise WorkbookLimitError("Workbook archive exceeds the 100 MB expansion or 1,000-entry limit")
     except zipfile.BadZipFile:
         raise ValueError("Malformed workbook archive") from None
     book = load_workbook(io.BytesIO(data), read_only=True, data_only=True, keep_links=False)
     if len(book.worksheets) > MAX_SHEETS:
-        raise ValueError("Too many worksheets")
+        raise WorkbookLimitError(f"Workbook has more than {MAX_SHEETS} worksheets")
     sheets = []
     samples = []
     issues = []
     wide_sheets = []
     headers = []
     correction_cells = []
-    for sheet in book.worksheets:
+    for sheet_number, sheet in enumerate(book.worksheets, start=1):
         # Some producer workbooks omit worksheet dimension metadata. openpyxl
         # then reports None until it scans the sheet in read-only mode.
         if sheet.max_row is None or sheet.max_column is None:
             sheet.calculate_dimension(force=True)
         if sheet.max_row > MAX_ROWS or sheet.max_column > MAX_COLUMNS:
-            raise ValueError("Worksheet exceeds row or column limit")
+            raise WorkbookLimitError(f"Worksheet {sheet_number} has {sheet.max_row} rows and {sheet.max_column} columns; limits are {MAX_ROWS:,} rows and {MAX_COLUMNS} columns")
         sheets.append(sheet.title)
         first_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
         second_row = next(sheet.iter_rows(min_row=2, max_row=2, values_only=True), ())

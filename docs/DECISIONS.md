@@ -1,5 +1,9 @@
 # Assumptions and open decisions
 
+## Workbook preview limit, 2026-11-25
+
+- A local `.xlsx` upload failed preview solely because three worksheets extended beyond the 100-column cap; the widest had 157 columns. The workbook has 15 sheets, stays below 10 MB, and previewed in 7.5 seconds with a 200-column cap. The cap is now 200; the 20,000-row, 30-sheet, 10 MB upload, and archive expansion limits remain. This diagnostic preview did not approve a mapping or commit training data. Full AT-02 sign-off still needs coach-approved reference workbooks.
+
 ## Security and UX implementation, 2026-11-25
 
 - The coach selected local-only operation, a performance studio design for current screens, encrypted database and backups, a recovery passphrase, LocalAppData storage, and a coach-selected backup destination.

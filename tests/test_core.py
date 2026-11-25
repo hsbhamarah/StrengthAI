@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from openpyxl import Workbook
 
-from strengthos.ingestion import extract_rows, inspect_workbook, validate_mapping
+from strengthos.ingestion import WorkbookLimitError, extract_rows, inspect_workbook, validate_mapping
 from strengthos.metrics import compute
 from strengthos.main import Login, Signup, app, health, list_ollama_models, login, ollama_models, setup_status, signup
 from strengthos.setup import credentials, main as setup_coach
@@ -30,6 +30,19 @@ def workbook(headers, rows):
 
 
 class IngestionTests(unittest.TestCase):
+    def test_wide_worksheet_within_200_column_limit_previews(self):
+        book = Workbook()
+        book.active.cell(1, 157, 'synthetic')
+        stream = io.BytesIO()
+        book.save(stream)
+        self.assertEqual(len(inspect_workbook(stream.getvalue())['sheets']), 1)
+
+        book.active.cell(1, 201, 'synthetic')
+        stream = io.BytesIO()
+        book.save(stream)
+        with self.assertRaisesRegex(WorkbookLimitError, '200 columns'):
+            inspect_workbook(stream.getvalue())
+
     def test_missing_dimension_metadata_is_scanned(self):
         data = workbook(['block', 'week', 'session', 'exercise', 'set'], [['B1', 'W1', 'D1', 'Squat', 1]])
         # A read-only worksheet with absent dimensions is a common Excel export.

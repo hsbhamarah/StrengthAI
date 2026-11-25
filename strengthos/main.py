@@ -31,7 +31,7 @@ from argon2 import PasswordHasher
 from strengthos.db import (ActualSet, Athlete, Base, DataSource, Exercise, ExercisePrescription,
     ImportJob, MappingProfile, PrescribedSet, RecordRevision, Session, SessionLocal,
     SourceRecord, TrainingBlock, TrainingWeek, engine)
-from strengthos.ingestion import MAX_UPLOAD_BYTES, extract_rows, inspect_workbook, validate_mapping
+from strengthos.ingestion import MAX_UPLOAD_BYTES, WorkbookLimitError, extract_rows, inspect_workbook, validate_mapping
 from strengthos.metrics import compute
 from strengthos.setup import create_coach, normalize_email, credentials
 
@@ -262,6 +262,8 @@ async def upload_excel(athlete_id: str = Form(...), file: UploadFile = File(...)
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     try:
         preview = inspect_workbook(data)
+    except WorkbookLimitError as exc:
+        raise HTTPException(422, str(exc)) from None
     except Exception:
         raise HTTPException(422, "Workbook could not be read. Check the file format and workbook limits.") from None
     if source_id:
