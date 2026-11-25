@@ -4,16 +4,17 @@ This is a separate runtime from the Windows-only coach app. The local app remain
 
 ## Local synthetic preview
 
-Run `run-local.ps1` to build the UI, migrate the ignored preview database, and open the portal on loopback. On first visit, create the coach account in the app and enroll an authenticator; keep its one-time recovery codes private. Existing coach credentials from the older workbook workspace are separate. For a manual start, use:
+Run `run-local.ps1` to build the UI, migrate the ignored preview database, and open the portal on loopback. The local preview opens directly as coach without a code. Existing coach credentials from the older workbook workspace are separate. For a manual start, use:
 
 ```powershell
 $env:STRENGTHOS_DATABASE_URL = 'sqlite:///data/portal_preview.db'
 $env:STRENGTHOS_PUBLIC_ORIGIN = 'http://127.0.0.1:8001'
+$env:STRENGTHOS_LOCAL_NO_AUTH = '1'
 .\.venv\Scripts\python.exe -m alembic upgrade head
 .\.venv\Scripts\python.exe -m uvicorn strengthos.hosted:app --host 127.0.0.1 --port 8001
 ```
 
-Run `npm run build` before starting the server. The loopback-only setup screen asks for a password and verifies a TOTP authenticator code, then shows eight recovery codes. Store those codes outside the server. The browser opens at `http://127.0.0.1:8001/portal`. Use **Create weekly plan** to build a week, publish it, choose a client and start date, and assign it. Use **Copy as next week** to make an editable new draft; publishing and assigning it preserves the prior week and its actuals. This HTTP exception is accepted only for a loopback preview containing synthetic data. Invite links cannot be used from a client's device until the portal is deployed publicly with HTTPS.
+Run `npm run build` before starting the server. The browser opens at `http://127.0.0.1:8001/portal`. Use **Create weekly plan** to build a week, publish it, choose a client and start date, and assign it. Use **Copy as next week** to make an editable new draft; publishing and assigning it preserves the prior week and its actuals. Local access requires an explicit flag, a loopback origin and client address, and a SQLite preview database; the public deployment never enables it. This HTTP exception is accepted only for a loopback preview containing synthetic data. Invite links cannot be used from a client's device until the portal is deployed publicly with HTTPS.
 
 ## India-hosted deployment
 

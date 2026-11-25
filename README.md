@@ -10,7 +10,7 @@ The portal supports reusable drafts, immutable published versions, client assign
 
 ## Development startup
 
-Use Python 3.12 and Node.js. In a normal PowerShell window with access to PyPI and npm, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run-local.ps1` from this folder. The script builds the UI, initializes the legacy encrypted workspace and a separate synthetic portal preview, starts both loopback services, and opens `http://127.0.0.1:8001/portal`. On first visit, create the portal coach account in the app and enroll an authenticator. Later runs reuse installed packages and accounts. Install logs and status are kept under ignored `data/`.
+Use Python 3.12 and Node.js. In a normal PowerShell window with access to PyPI and npm, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run-local.ps1` from this folder. The script builds the UI, initializes the legacy encrypted workspace and a separate synthetic portal preview, starts both loopback services, and opens `http://127.0.0.1:8001/portal`. The local portal opens directly as coach without a code. Later runs reuse installed packages and accounts. Install logs and status are kept under ignored `data/`.
 
 If the app is already running without a coach account, open `http://127.0.0.1:8000/sign-up`. An existing password-only account can run `.\.venv\Scripts\python.exe -m strengthos.setup` to add its email after confirming the current password.
 

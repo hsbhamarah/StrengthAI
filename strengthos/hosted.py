@@ -41,6 +41,8 @@ ORIGIN = os.environ.get("STRENGTHOS_PUBLIC_ORIGIN", "").rstrip("/")
 DEV = ORIGIN.startswith("http://127.0.0.1:") or ORIGIN.startswith("http://localhost:")
 if not ORIGIN.startswith("https://") and not DEV:
     raise RuntimeError("STRENGTHOS_PUBLIC_ORIGIN must use HTTPS except for loopback development")
+LOCAL_BYPASS = (DEV and os.environ.get("STRENGTHOS_LOCAL_NO_AUTH") == "1" and
+                os.environ["STRENGTHOS_DATABASE_URL"].startswith("sqlite:///"))
 
 def purge_expired_imports():
     with SessionLocal.begin() as session:
@@ -229,7 +231,8 @@ setup_pending: dict[str, dict] = {}
 
 @app.get("/api/v1/auth/setup-status")
 def setup_status(session: DBSession = Depends(db)):
-    return {"signup_available": DEV and not bool(session.scalar(select(Account.account_id).where(Account.role == "coach").limit(1)))}
+    return {"signup_available": DEV and not LOCAL_BYPASS and not bool(session.scalar(select(Account.account_id).where(Account.role == "coach").limit(1))),
+            "local_access_available": LOCAL_BYPASS}
 
 
 @app.post("/api/v1/auth/setup/start")
@@ -299,6 +302,10 @@ def login(payload: Login, response: Response, request: Request, session: DBSessi
     if not valid or (account.role == "coach" and not verify_mfa(account, payload.mfa_code)):
         raise HTTPException(401, "Invalid credentials")
     login_attempts.pop(key, None)
+    return issue_session(session, account, response, "login")
+
+
+def issue_session(session: DBSession, account: Account, response: Response, action: str):
     if account.role == "coach":
         for prior in session.scalars(select(AuthSession).where(AuthSession.account_id == account.account_id,
                                                               AuthSession.revoked_at.is_(None))):
@@ -307,11 +314,30 @@ def login(payload: Login, response: Response, request: Request, session: DBSessi
     session.add(AuthSession(session_id=uid(), account_id=account.account_id, token_hash=digest(token),
                             csrf_hash=digest(csrf), created_at=stamp(), touched_at=stamp(),
                             expires_at=(datetime.now(timezone.utc) + timedelta(hours=8)).isoformat()))
-    audit(session, account, "login")
+    audit(session, account, action)
     session.commit()
     response.set_cookie(SESSION_COOKIE, token, httponly=True, secure=not DEV,
                         samesite="strict", path="/", max_age=28800)
-    return {"role": account.role, "csrf_token": csrf, "athlete_id": account.athlete_id}
+    return {"role": account.role, "email": account.email, "csrf_token": csrf, "athlete_id": account.athlete_id}
+
+
+@app.post("/api/v1/auth/local-access")
+def local_access(request: Request, response: Response, session: DBSession = Depends(db)):
+    if not LOCAL_BYPASS:
+        raise HTTPException(404, "Unavailable")
+    if not request.client or request.client.host not in {"127.0.0.1", "::1"}:
+        raise HTTPException(403, "Loopback access required")
+    with setup_lock:
+        account = session.scalar(select(Account).where(Account.role == "coach"))
+        if not account:
+            account = Account(account_id=uid(), role="coach", athlete_id=None,
+                              email="local-preview@localhost.invalid",
+                              password_hash=hasher.hash(secrets.token_urlsafe(32)),
+                              mfa_secret=base64.b32encode(secrets.token_bytes(20)).decode().rstrip("="),
+                              recovery_hashes_json="[]", created_at=stamp())
+            session.add(account)
+            session.flush()
+        return issue_session(session, account, response, "local_preview_access")
 
 
 login_attempts: dict[str, list[float]] = {}

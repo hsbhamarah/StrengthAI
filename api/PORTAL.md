@@ -4,6 +4,8 @@ All paths use `/api/v1`. Public operations: `POST /auth/login` (email, password,
 
 On a loopback preview only, `GET /auth/setup-status`, `POST /auth/setup/start`, and `POST /auth/setup/finish` enroll the first coach with password and verified TOTP, then return one-time recovery codes. Public HTTPS deployments retain command-line-only coach registration.
 
+With explicit `STRENGTHOS_LOCAL_NO_AUTH=1`, a loopback SQLite preview also exposes `POST /auth/local-access`. It creates a coach preview account if needed and issues a normal session without password or MFA. Public and non-loopback requests cannot use this endpoint. Client accounts still use email/password sign-in.
+
 Coach-only operations:
 
 | Method and path | Result |

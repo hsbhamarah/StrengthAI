@@ -169,6 +169,40 @@ class PortalTests(unittest.TestCase):
             hosted.setup_pending.clear()
             fresh.dispose()
 
+    def test_local_access_requires_loopback_and_keeps_csrf(self):
+        with patch.object(hosted, "LOCAL_BYPASS", True):
+            browser = TestClient(hosted.app, base_url=ORIGIN, headers={"Origin": ORIGIN},
+                                 client=("127.0.0.1", 45000))
+            self.assertEqual(browser.get("/api/v1/auth/me").status_code, 401)
+            entered = browser.post("/api/v1/auth/local-access", json={})
+            self.assertEqual(entered.status_code, 200, entered.text)
+            self.assertEqual(entered.json()["role"], "coach")
+            self.assertEqual(browser.get("/api/v1/auth/me").status_code, 200)
+            draft = {"name": "Week", "program": {"weeks": []}}
+            self.assertEqual(browser.post("/api/v1/templates", json=draft).status_code, 403)
+            browser.headers["X-CSRF-Token"] = entered.json()["csrf_token"]
+            self.assertEqual(browser.post("/api/v1/templates", json=draft).status_code, 201)
+            remote = TestClient(hosted.app, base_url=ORIGIN, headers={"Origin": ORIGIN},
+                                client=("198.51.100.5", 45000))
+            self.assertEqual(remote.post("/api/v1/auth/local-access", json={}).status_code, 403)
+        self.assertEqual(browser.post("/api/v1/auth/local-access", json={}).status_code, 404)
+
+    def test_local_access_creates_only_one_preview_coach(self):
+        fresh = make_engine("sqlite:///" + str(Path(self.temp.name) / "local-access.db"))
+        try:
+            with patch("strengthos.db.engine", fresh):
+                command.upgrade(Config("alembic.ini"), "head")
+            with patch.object(hosted, "SessionLocal", sessionmaker(fresh)), patch.object(hosted, "LOCAL_BYPASS", True):
+                browser = TestClient(hosted.app, base_url=ORIGIN, headers={"Origin": ORIGIN},
+                                     client=("127.0.0.1", 45000))
+                self.assertEqual(browser.post("/api/v1/auth/local-access", json={}).status_code, 200)
+                self.assertEqual(browser.post("/api/v1/auth/local-access", json={}).status_code, 200)
+                with sessionmaker(fresh)() as db:
+                    self.assertEqual(len(db.scalars(select(Account)).all()), 1)
+                self.assertFalse(browser.get("/api/v1/auth/setup-status").json()["signup_available"])
+        finally:
+            fresh.dispose()
+
     def test_session_revocation_and_invite_expiry(self):
         athlete = self.coach.post("/api/v1/athletes", json={"display_name": "Client"}).json()["athlete_id"]
         user = self.invite(athlete, "client@example.com")

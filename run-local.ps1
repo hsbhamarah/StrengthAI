@@ -13,12 +13,14 @@ $npm = 'C:\Program Files\nodejs\npm.cmd'
 
 if ($Mode -eq 'api') {
     Remove-Item Env:STRENGTHOS_DATABASE_URL -ErrorAction SilentlyContinue
+    Remove-Item Env:STRENGTHOS_LOCAL_NO_AUTH -ErrorAction SilentlyContinue
     & $python -m uvicorn strengthos.main:app --host 127.0.0.1 --port 8000 --no-access-log
     exit $LASTEXITCODE
 }
 if ($Mode -eq 'portal') {
     $env:STRENGTHOS_DATABASE_URL = 'sqlite:///data/portal_preview.db'
     $env:STRENGTHOS_PUBLIC_ORIGIN = 'http://127.0.0.1:8001'
+    $env:STRENGTHOS_LOCAL_NO_AUTH = '1'
     & $python -m uvicorn strengthos.hosted:app --host 127.0.0.1 --port 8001 --no-access-log
     exit $LASTEXITCODE
 }
